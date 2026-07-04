@@ -16,6 +16,15 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Early Termux check (before using $PREFIX)
+# ---------------------------------------------------------------------------
+if [ ! -d "/data/data/com.termux" ]; then
+  echo "[ERROR] This script must be run inside Termux."
+  echo "        Install Termux from https://f-droid.org/en/packages/com.termux/"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 BRIDGE_DIR="$HOME/.vibeshell/bridge"
@@ -39,10 +48,7 @@ log_warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
 check_termux() {
-  if [ ! -d "/data/data/com.termux" ]; then
-    log_error "This script must be run inside Termux."
-    exit 1
-  fi
+  : # Already checked at script startup
 }
 
 # ---------------------------------------------------------------------------
