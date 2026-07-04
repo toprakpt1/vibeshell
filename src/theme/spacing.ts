@@ -38,12 +38,10 @@ export const borderRadius = {
   sm: 6,
   /** 8px — cards, panels */
   md: 8,
-  /** 12px — modals, floating elements */
+  /** 12px — modals, floating elements, max for cards */
   lg: 12,
-  /** 16px — large cards */
-  xl: 16,
-  /** 9999px — pills / circles */
-  full: 9999,
+  /** 999px — circles (avatars) */
+  full: 999,
 } as const;
 
 // ─── Border widths ───────────────────────────────────────────────────
@@ -111,10 +109,10 @@ export const shadows = {
   },
   lg: {
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.50,
-    shadowRadius: 16,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
   },
 } as const;
 

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "uncodixfy": {
+      "source": "cyxzdev/Uncodixfy",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "9e6204fdb4b28c486152d4ce961f2edd340b9e4487cf6cbdff5ed4af434cde15"
+    }
+  }
+}

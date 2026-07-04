@@ -1,38 +1,64 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Platform } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useSettings } from '../src/store/useSettings';
+import { useBridgeStore } from '../src/store/useBridgeStore';
 import { theme } from '../src/theme';
 
+const INSTALL_COMMAND = 'curl -sL https://raw.githubusercontent.com/toprakpt1/vibeshell/master/bridge/install.sh | bash';
+
 export default function OnboardingScreen() {
-  const installCommand = 'curl -sL https://raw.githubusercontent.com/vibeshell/vibeshell/main/bridge/install.sh | bash';
+  const router = useRouter();
+  const { setBridgeToken, setOnboardingSeen } = useSettings();
+  const { connect, connectionState } = useBridgeStore();
+  const [token, setToken] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   const copyToClipboard = async () => {
-    await Clipboard.setStringAsync(installCommand);
-    // Could add a toast here
+    await Clipboard.setStringAsync(INSTALL_COMMAND);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const openFDroid = () => {
     Linking.openURL('https://f-droid.org/en/packages/com.termux/');
   };
 
+  const handleCheckConnection = async () => {
+    if (!token.trim()) return;
+    setChecking(true);
+    await setBridgeToken(token.trim());
+    connect('ws://127.0.0.1:8765', token.trim());
+    setTimeout(() => setChecking(false), 3000);
+  };
+
+  const handleDone = async () => {
+    if (token.trim()) {
+      await setBridgeToken(token.trim());
+    }
+    await setOnboardingSeen();
+    router.replace('/');
+  };
+
+  const handleSkip = async () => {
+    await setOnboardingSeen();
+    router.replace('/');
+  };
+
+  const isConnected = connectionState === 'connected';
+
   return (
     <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Ionicons name="terminal" size={48} color={theme.colors.brand.primary} />
-        <Text style={styles.title}>Setup Termux Bridge</Text>
-        <Text style={styles.subtitle}>
-          VibeSHell needs a local background service in Termux to execute commands and access your files.
-        </Text>
-      </View>
-
       <View style={styles.step}>
         <View style={styles.stepHeader}>
           <View style={styles.stepNumber}><Text style={styles.stepNumberText}>1</Text></View>
           <Text style={styles.stepTitle}>Install Termux</Text>
         </View>
         <Text style={styles.stepDesc}>
-          If you don't have it, install Termux from F-Droid (Play Store version is deprecated).
+          Install Termux from F-Droid. The Play Store version is deprecated and will not work.
         </Text>
         <TouchableOpacity style={styles.linkButton} onPress={openFDroid}>
           <Ionicons name="download-outline" size={20} color={theme.colors.brand.primary} />
@@ -46,14 +72,14 @@ export default function OnboardingScreen() {
           <Text style={styles.stepTitle}>Run Install Script</Text>
         </View>
         <Text style={styles.stepDesc}>
-          Open Termux and paste this command to install Node.js and setup the bridge server:
+          Open Termux and paste this command. It installs Node.js and sets up the bridge server:
         </Text>
-        
+
         <View style={styles.codeBlock}>
-          <Text style={styles.codeText}>{installCommand}</Text>
+          <Text style={styles.codeText} selectable>{INSTALL_COMMAND}</Text>
           <TouchableOpacity style={styles.copyButton} onPress={copyToClipboard}>
-            <Ionicons name="copy-outline" size={20} color={theme.colors.text.inverse} />
-            <Text style={styles.copyButtonText}>Copy</Text>
+            <Ionicons name={copied ? "checkmark" : "copy-outline"} size={16} color={theme.colors.text.inverse} />
+            <Text style={styles.copyButtonText}>{copied ? 'Copied' : 'Copy'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -61,13 +87,55 @@ export default function OnboardingScreen() {
       <View style={styles.step}>
         <View style={styles.stepHeader}>
           <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
-          <Text style={styles.stepTitle}>Save Your Token</Text>
+          <Text style={styles.stepTitle}>Enter Your Token</Text>
         </View>
         <Text style={styles.stepDesc}>
-          The script will print an Auth Token at the end. Copy it and paste it in the VibeSHell Settings page to secure the connection.
+          The script prints an auth token at the end. Paste it below to connect.
         </Text>
+
+        <TextInput
+          style={styles.input}
+          value={token}
+          onChangeText={setToken}
+          placeholder="Paste your auth token"
+          placeholderTextColor={theme.colors.text.muted}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        <TouchableOpacity
+          style={[styles.checkButton, (!token.trim() || checking) && styles.checkButtonDisabled]}
+          onPress={handleCheckConnection}
+          disabled={!token.trim() || checking}
+        >
+          {checking ? (
+            <Ionicons name="sync" size={16} color={theme.colors.text.inverse} />
+          ) : isConnected ? (
+            <Ionicons name="checkmark-circle" size={16} color={theme.colors.text.inverse} />
+          ) : (
+            <Ionicons name="wifi" size={16} color={theme.colors.text.inverse} />
+          )}
+          <Text style={styles.checkButtonText}>
+            {checking ? 'Checking...' : isConnected ? 'Connected' : 'Check Connection'}
+          </Text>
+        </TouchableOpacity>
+
+        {isConnected && (
+          <View style={styles.successBanner}>
+            <Ionicons name="checkmark-circle" size={16} color={theme.colors.semantic.success} />
+            <Text style={styles.successText}>Bridge connected successfully</Text>
+          </View>
+        )}
       </View>
 
+      <View style={styles.actions}>
+        <TouchableOpacity style={styles.doneButton} onPress={handleDone}>
+          <Text style={styles.doneButtonText}>Done</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
+          <Text style={styles.skipButtonText}>Skip — set up later</Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 }
@@ -76,23 +144,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.backgrounds.base,
-  },
-  header: {
-    alignItems: 'center',
-    padding: theme.spacing.xl,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.borders.default,
-  },
-  title: {
-    ...theme.typography.textStyles.title,
-    color: theme.colors.text.primary,
-    marginTop: theme.spacing.md,
-    marginBottom: theme.spacing.sm,
-  },
-  subtitle: {
-    ...theme.typography.textStyles.body,
-    color: theme.colors.text.muted,
-    textAlign: 'center',
   },
   step: {
     padding: theme.spacing.lg,
@@ -107,7 +158,7 @@ const styles = StyleSheet.create({
   stepNumber: {
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: theme.borderRadius.md,
     backgroundColor: theme.colors.brand.primaryMuted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -165,5 +216,70 @@ const styles = StyleSheet.create({
     ...theme.typography.textStyles.bodySmall,
     color: theme.colors.text.inverse,
     fontWeight: theme.typography.fontWeights.medium,
+  },
+  input: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.text.primary,
+    backgroundColor: theme.colors.surfaces.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.borders.default,
+    borderRadius: theme.borderRadius.md,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+    fontFamily: theme.typography.fontFamilies.mono,
+  },
+  checkButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.brand.primary,
+    padding: theme.spacing.md,
+    borderRadius: theme.borderRadius.md,
+    gap: theme.spacing.sm,
+  },
+  checkButtonDisabled: {
+    opacity: 0.5,
+  },
+  checkButtonText: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.text.inverse,
+    fontWeight: theme.typography.fontWeights.medium,
+  },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.md,
+    padding: theme.spacing.sm,
+    backgroundColor: theme.colors.semantic.successMuted,
+    borderRadius: theme.borderRadius.sm,
+  },
+  successText: {
+    ...theme.typography.textStyles.bodySmall,
+    color: theme.colors.semantic.success,
+  },
+  actions: {
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  doneButton: {
+    backgroundColor: theme.colors.brand.primary,
+    padding: theme.spacing.md,
+    borderRadius: theme.borderRadius.md,
+    alignItems: 'center',
+  },
+  doneButtonText: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.text.inverse,
+    fontWeight: theme.typography.fontWeights.medium,
+  },
+  skipButton: {
+    padding: theme.spacing.md,
+    borderRadius: theme.borderRadius.md,
+    alignItems: 'center',
+  },
+  skipButtonText: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.text.muted,
   },
 });

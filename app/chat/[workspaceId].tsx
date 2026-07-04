@@ -1,10 +1,10 @@
 import React, { useRef, useEffect } from 'react';
 import { View, FlatList, StyleSheet } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import { useChatStore } from '../src/store/useChatStore';
-import { useWorkspaces } from '../src/store/useWorkspaces';
-import { ChatMessage, ChatInput } from '../src/components';
-import { theme } from '../src/theme';
+import { useChatStore } from '../../src/store/useChatStore';
+import { useWorkspaces } from '../../src/store/useWorkspaces';
+import { ChatMessage, ChatInput } from '../../src/components';
+import { theme } from '../../src/theme';
 
 export default function ChatScreen() {
   const { workspaceId } = useLocalSearchParams<{ workspaceId: string }>();

@@ -81,7 +81,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     backgroundColor: theme.colors.surfaces.surface,
-    borderRadius: theme.borderRadius.xl,
+    borderRadius: theme.borderRadius.lg,
     borderWidth: 1,
     borderColor: theme.colors.borders.default,
     paddingHorizontal: theme.spacing.md,
@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
   sendButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: theme.borderRadius.sm,
     backgroundColor: theme.colors.brand.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -112,7 +112,7 @@ const styles = StyleSheet.create({
   stopButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: theme.borderRadius.sm,
     backgroundColor: theme.colors.semantic.error,
     alignItems: 'center',
     justifyContent: 'center',

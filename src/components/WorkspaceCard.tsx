@@ -54,7 +54,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: theme.colors.surfaces.surface,
-    borderRadius: theme.borderRadius.lg,
+    borderRadius: theme.borderRadius.md,
     padding: theme.spacing.md,
     marginBottom: theme.spacing.md,
     borderWidth: 1,
@@ -76,12 +76,12 @@ const styles = StyleSheet.create({
   name: {
     ...theme.typography.textStyles.heading,
     color: theme.colors.text.primary,
-    marginBottom: 2,
+    marginBottom: theme.spacing.xxs,
   },
   path: {
     ...theme.typography.textStyles.codeSmall,
     color: theme.colors.text.muted,
-    marginBottom: 4,
+    marginBottom: theme.spacing.xs,
   },
   date: {
     ...theme.typography.textStyles.caption,

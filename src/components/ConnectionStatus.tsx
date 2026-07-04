@@ -6,8 +6,8 @@ import { theme } from '../theme';
 export function ConnectionStatus() {
   const { connectionState, errorMessage } = useBridgeStore();
 
-  let bgColor = theme.colors.semantic.errorMuted;
-  let textColor = theme.colors.semantic.error;
+  let bgColor: string = theme.colors.semantic.errorMuted;
+  let textColor: string = theme.colors.semantic.error;
   let text = 'Bağlantı Hatası';
 
   if (connectionState === 'connected') {
@@ -51,8 +51,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 2,
-    borderRadius: theme.borderRadius.full,
+    paddingVertical: theme.spacing.xxs,
+    borderRadius: theme.borderRadius.sm,
     gap: theme.spacing.xs,
   },
   dot: {

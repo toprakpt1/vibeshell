@@ -3,12 +3,14 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput } from 'r
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useWorkspaces } from '../src/store/useWorkspaces';
+import { useBridgeStore } from '../src/store/useBridgeStore';
 import { ConnectionStatus, WorkspaceCard } from '../src/components';
 import { theme } from '../src/theme';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { workspaces, addWorkspace, removeWorkspace, setActiveWorkspace } = useWorkspaces();
+  const { connectionState } = useBridgeStore();
   const [isAdding, setIsAdding] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPath, setNewPath] = useState('~/projects/');
@@ -31,6 +33,17 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       <ConnectionStatus />
+      
+      {(connectionState === 'disconnected' || connectionState === 'error') && (
+        <TouchableOpacity 
+          style={styles.setupBanner}
+          onPress={() => router.push('/onboarding')}
+        >
+          <Ionicons name="hardware-chip-outline" size={16} color={theme.colors.brand.primary} />
+          <Text style={styles.setupBannerText}>Bridge not running — tap to set up</Text>
+          <Ionicons name="chevron-forward" size={16} color={theme.colors.text.muted} />
+        </TouchableOpacity>
+      )}
       
       <View style={styles.header}>
         <Text style={styles.title}>Workspaces</Text>
@@ -118,7 +131,7 @@ export default function HomeScreen() {
             onPress={() => setIsAdding(true)}
             activeOpacity={0.8}
           >
-            <Ionicons name="add" size={32} color={theme.colors.text.inverse} />
+            <Ionicons name="add" size={24} color={theme.colors.text.inverse} />
           </TouchableOpacity>
         </View>
       )}
@@ -168,22 +181,39 @@ const styles = StyleSheet.create({
     color: theme.colors.text.muted,
     marginTop: theme.spacing.xs,
   },
+  setupBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+    padding: theme.spacing.md,
+    backgroundColor: theme.colors.brand.primaryMuted,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.brand.primary,
+  },
+  setupBannerText: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.brand.primary,
+    flex: 1,
+  },
   fabContainer: {
     position: 'absolute',
     bottom: theme.spacing.xl,
     right: theme.spacing.xl,
   },
   fab: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 48,
+    height: 48,
+    borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.brand.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 4,
+    elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
     shadowRadius: 4,
   },
   addForm: {
@@ -193,15 +223,15 @@ const styles = StyleSheet.create({
     right: 0,
     backgroundColor: theme.colors.surfaces.surface,
     padding: theme.spacing.lg,
-    borderTopLeftRadius: theme.borderRadius.xl,
-    borderTopRightRadius: theme.borderRadius.xl,
+    borderTopLeftRadius: theme.borderRadius.lg,
+    borderTopRightRadius: theme.borderRadius.lg,
     borderTopWidth: 1,
     borderTopColor: theme.colors.borders.default,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
+    shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowRadius: 4,
+    elevation: 4,
   },
   formTitle: {
     ...theme.typography.textStyles.heading,

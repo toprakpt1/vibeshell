@@ -23,15 +23,17 @@ interface SettingsState {
   bridgeUrl: string;
   bridgeToken: string;
   systemPrompt: string;
+  hasSeenOnboarding: boolean;
   isLoaded: boolean;
 
   // Actions
   loadSettings: () => Promise<void>;
   setApiKey: (key: string) => Promise<void>;
   setModel: (model: ModelId) => Promise<void>;
-  setBridgeUrl: (url: string) => void;
+  setBridgeUrl: (url: string) => Promise<void>;
   setBridgeToken: (token: string) => Promise<void>;
   setSystemPrompt: (prompt: string) => void;
+  setOnboardingSeen: () => Promise<void>;
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful coding assistant. You have access to tools for reading and writing files, running shell commands, and working with git. Use these tools to help the user with their coding tasks.
@@ -54,18 +56,23 @@ export const useSettings = create<SettingsState>((set) => ({
   bridgeUrl: 'ws://127.0.0.1:8765',
   bridgeToken: '',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  hasSeenOnboarding: false,
   isLoaded: false,
 
   loadSettings: async () => {
-    const [apiKey, model, bridgeToken] = await Promise.all([
+    const [apiKey, model, bridgeToken, bridgeUrl, hasSeenOnboarding] = await Promise.all([
       secureStorage.getApiKey(),
       secureStorage.getModel(),
       secureStorage.getBridgeToken(),
+      secureStorage.getBridgeUrl(),
+      secureStorage.getOnboardingSeen(),
     ]);
     set({
       apiKey: apiKey || '',
       model: (model as ModelId) || 'anthropic/claude-sonnet-4',
       bridgeToken: bridgeToken || '',
+      bridgeUrl: bridgeUrl || 'ws://127.0.0.1:8765',
+      hasSeenOnboarding,
       isLoaded: true,
     });
   },
@@ -80,7 +87,10 @@ export const useSettings = create<SettingsState>((set) => ({
     set({ model });
   },
 
-  setBridgeUrl: (url: string) => set({ bridgeUrl: url }),
+  setBridgeUrl: async (url: string) => {
+    await secureStorage.setBridgeUrl(url);
+    set({ bridgeUrl: url });
+  },
 
   setBridgeToken: async (token: string) => {
     await secureStorage.setBridgeToken(token);
@@ -88,4 +98,9 @@ export const useSettings = create<SettingsState>((set) => ({
   },
 
   setSystemPrompt: (prompt: string) => set({ systemPrompt: prompt }),
+
+  setOnboardingSeen: async () => {
+    await secureStorage.setOnboardingSeen(true);
+    set({ hasSeenOnboarding: true });
+  },
 }));

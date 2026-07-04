@@ -6,6 +6,8 @@ import * as SecureStore from 'expo-secure-store';
 const KEYS = {
   API_KEY: 'vibeshell_api_key',
   BRIDGE_TOKEN: 'vibeshell_bridge_token',
+  BRIDGE_URL: 'vibeshell_bridge_url',
+  ONBOARDING_SEEN: 'vibeshell_onboarding_seen',
   PROVIDER: 'vibeshell_provider',
   MODEL: 'vibeshell_model',
 } as const;
@@ -24,6 +26,23 @@ export async function getBridgeToken(): Promise<string | null> {
 
 export async function setBridgeToken(token: string): Promise<void> {
   await SecureStore.setItemAsync(KEYS.BRIDGE_TOKEN, token);
+}
+
+export async function getBridgeUrl(): Promise<string | null> {
+  return SecureStore.getItemAsync(KEYS.BRIDGE_URL);
+}
+
+export async function setBridgeUrl(url: string): Promise<void> {
+  await SecureStore.setItemAsync(KEYS.BRIDGE_URL, url);
+}
+
+export async function getOnboardingSeen(): Promise<boolean> {
+  const val = await SecureStore.getItemAsync(KEYS.ONBOARDING_SEEN);
+  return val === 'true';
+}
+
+export async function setOnboardingSeen(seen: boolean): Promise<void> {
+  await SecureStore.setItemAsync(KEYS.ONBOARDING_SEEN, seen ? 'true' : 'false');
 }
 
 export async function getProvider(): Promise<string | null> {

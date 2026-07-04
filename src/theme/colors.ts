@@ -10,16 +10,22 @@
 export const backgrounds = {
   /** App-level root background */
   primary: '#0D1117',
+  /** Alias for primary — used by some components */
+  base: '#0D1117',
   /** Cards, panels, sidebars */
   secondary: '#161B22',
   /** Elevated surfaces, modals */
   tertiary: '#21262D',
+  /** Alias for tertiary — code blocks, elevated containers */
+  elevated: '#21262D',
 } as const;
 
 // ─── Surface layers ──────────────────────────────────────────────────
 export const surfaces = {
   /** Default surface (input fields, list items) */
   default: '#1C2128',
+  /** Alias for default — used by some components */
+  surface: '#1C2128',
   /** Hovered / active surface */
   hover: '#2D333B',
   /** Overlay / backdrop tint */
@@ -31,17 +37,17 @@ export const surfaces = {
 // ─── Brand / accent ─────────────────────────────────────────────────
 export const brand = {
   /** Primary interactive color (links, buttons, focused borders) */
-  primary: '#58A6FF',
+  primary: '#00d4aa',
   /** Lighter variant for hover states */
-  primaryHover: '#79C0FF',
+  primaryHover: '#00e6bc',
   /** Muted variant for subtle highlights */
-  primaryMuted: 'rgba(88, 166, 255, 0.15)',
+  primaryMuted: 'rgba(0, 212, 170, 0.12)',
   /** Accent / secondary brand color */
-  accent: '#A371F7',
+  accent: '#7aa2f7',
   /** Accent hover */
-  accentHover: '#BC8CFF',
+  accentHover: '#89b4fa',
   /** Accent muted */
-  accentMuted: 'rgba(163, 113, 247, 0.15)',
+  accentMuted: 'rgba(122, 162, 247, 0.12)',
 } as const;
 
 // ─── Text hierarchy ─────────────────────────────────────────────────
@@ -50,12 +56,14 @@ export const text = {
   primary: '#E6EDF3',
   /** Secondary text — descriptions, labels */
   secondary: '#8B949E',
+  /** Muted text — placeholders, disabled */
+  muted: '#8B949E',
   /** Tertiary / disabled text */
   tertiary: '#484F58',
   /** Inverse text (on light / primary backgrounds) */
   inverse: '#0D1117',
   /** Link text */
-  link: '#58A6FF',
+  link: '#00d4aa',
 } as const;
 
 // ─── Semantic ────────────────────────────────────────────────────────
@@ -66,8 +74,8 @@ export const semantic = {
   warningMuted: 'rgba(210, 153, 34, 0.15)',
   error: '#F85149',
   errorMuted: 'rgba(248, 81, 73, 0.15)',
-  info: '#58A6FF',
-  infoMuted: 'rgba(88, 166, 255, 0.15)',
+  info: '#00d4aa',
+  infoMuted: 'rgba(0, 212, 170, 0.12)',
 } as const;
 
 // ─── Diff / code review ─────────────────────────────────────────────
@@ -89,7 +97,7 @@ export const borders = {
   default: '#30363D',
   muted: '#21262D',
   subtle: 'rgba(240, 246, 252, 0.06)',
-  focused: '#58A6FF',
+  focused: '#00d4aa',
 } as const;
 
 // ─── Syntax highlighting (for code viewers) ──────────────────────────

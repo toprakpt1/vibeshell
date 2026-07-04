@@ -71,7 +71,7 @@ const styles = StyleSheet.create({
   avatar: {
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: theme.borderRadius.md,
     backgroundColor: theme.colors.surfaces.surface,
     alignItems: 'center',
     justifyContent: 'center',
@@ -84,7 +84,7 @@ const styles = StyleSheet.create({
     maxWidth: '85%',
   },
   userBubble: {
-    backgroundColor: theme.colors.brand.primaryMuted,
+    backgroundColor: theme.colors.surfaces.hover,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
     borderRadius: theme.borderRadius.lg,
@@ -92,7 +92,7 @@ const styles = StyleSheet.create({
   },
   userText: {
     ...theme.typography.textStyles.body,
-    color: theme.colors.text.inverse, // Light blue primary bg needs lighter text
+    color: theme.colors.text.primary,
   },
   toolCallWrapper: {
     marginTop: theme.spacing.sm,

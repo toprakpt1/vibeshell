@@ -179,8 +179,16 @@ export const textStyles = {
     fontSize: fontSizes.sm,
     fontWeight: fontWeights.semibold,
     lineHeight: fontSizes.sm * lineHeights.tight,
-    letterSpacing: letterSpacing.wider,
-    textTransform: 'uppercase',
+    letterSpacing: letterSpacing.normal,
+  } as TextStyle,
+
+  /** Small body variant — secondary text in cards, buttons */
+  bodySmall: {
+    fontFamily: fontFamilies.sans,
+    fontSize: fontSizes.sm,
+    fontWeight: fontWeights.regular,
+    lineHeight: fontSizes.sm * lineHeights.normal,
+    letterSpacing: letterSpacing.normal,
   } as TextStyle,
 } as const;
 

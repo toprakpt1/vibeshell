@@ -26,7 +26,7 @@ export function DiffViewer({ diff, filePath, onApprove, onReject }: DiffViewerPr
         <View>
           {lines.map((line, index) => {
             let lineStyle = styles.lineNormal;
-            let textStyle = styles.textNormal;
+            let textStyle: { color?: string } = styles.textNormal;
             
             if (line.startsWith('+')) {
               lineStyle = styles.lineAdded;

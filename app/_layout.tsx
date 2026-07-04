@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSettings } from '../src/store/useSettings';
 import { useBridgeStore } from '../src/store/useBridgeStore';
@@ -8,8 +8,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 
 export default function RootLayout() {
-  const { loadSettings, isLoaded, bridgeUrl, bridgeToken } = useSettings();
+  const { loadSettings, isLoaded, bridgeUrl, bridgeToken, hasSeenOnboarding } = useSettings();
   const { connect } = useBridgeStore();
+  const router = useRouter();
 
   useEffect(() => {
     loadSettings();
@@ -20,6 +21,12 @@ export default function RootLayout() {
       connect(bridgeUrl, bridgeToken);
     }
   }, [isLoaded, bridgeUrl, bridgeToken, connect]);
+
+  useEffect(() => {
+    if (isLoaded && !bridgeToken && !hasSeenOnboarding) {
+      router.replace('/onboarding');
+    }
+  }, [isLoaded, bridgeToken, hasSeenOnboarding, router]);
 
   if (!isLoaded) {
     return (
