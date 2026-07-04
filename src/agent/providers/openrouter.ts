@@ -7,13 +7,22 @@ import {
   ContentBlock,
   Message,
   ToolDefinition,
-} from './types';
+} from '../types';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 interface OpenRouterMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string | OpenRouterContentBlock[];
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | OpenRouterContentBlock[] | null;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+  tool_call_id?: string;
 }
 
 interface OpenRouterContentBlock {
@@ -74,7 +83,7 @@ function convertTools(tools: ToolDefinition[]): OpenRouterTool[] {
   }));
 }
 
-/** Convert our messages to OpenRouter format */
+/** Convert our messages to OpenRouter (OpenAI-compatible) format */
 function convertMessages(
   messages: Message[],
   systemPrompt: string,
@@ -85,70 +94,57 @@ function convertMessages(
 
   for (const msg of messages) {
     if (msg.role === 'user') {
-      const contentBlocks: OpenRouterContentBlock[] = [];
+      const textBlocks: OpenRouterContentBlock[] = [];
       for (const block of msg.content) {
         if (block.type === 'text') {
-          contentBlocks.push({ type: 'text', text: block.text });
+          textBlocks.push({ type: 'text', text: block.text });
         } else if (block.type === 'tool_result') {
-          // Tool results go as separate messages in OpenRouter format
+          // OpenAI format: role "tool" with tool_call_id
           result.push({
-            role: 'user' as const,
-            content: [
-              {
-                type: 'tool_result' as const,
-                tool_use_id: block.tool_use_id,
-                content: block.content,
-                is_error: block.is_error,
-              },
-            ],
+            role: 'tool',
+            content: block.content,
+            tool_call_id: block.tool_use_id,
           });
           continue;
         }
       }
-      if (contentBlocks.length > 0) {
+      if (textBlocks.length > 0) {
         result.push({
           role: 'user',
           content:
-            contentBlocks.length === 1 && contentBlocks[0].type === 'text'
-              ? (contentBlocks[0].text as string)
-              : contentBlocks,
+            textBlocks.length === 1 && textBlocks[0].type === 'text'
+              ? (textBlocks[0].text as string)
+              : textBlocks,
         });
       }
     } else if (msg.role === 'assistant') {
       const hasToolCalls = msg.content.some((b) => b.type === 'tool_use');
       if (hasToolCalls) {
         const textContent = msg.content
-          .filter((b) => b.type === 'text')
-          .map((b) => (b as { type: 'text'; text: string }).text)
+          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .map((b) => b.text)
           .join('');
         const toolCalls = msg.content
-          .filter((b) => b.type === 'tool_use')
-          .map((b) => {
-            const toolUse = b as {
-              type: 'tool_use';
-              id: string;
-              name: string;
-              input: Record<string, unknown>;
-            };
-            return {
-              id: toolUse.id,
-              type: 'function' as const,
-              function: {
-                name: toolUse.name,
-                arguments: JSON.stringify(toolUse.input),
-              },
-            };
-          });
+          .filter((b): b is { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> } => b.type === 'tool_use')
+          .map((b) => ({
+            id: b.id,
+            type: 'function' as const,
+            function: {
+              name: b.name,
+              arguments: JSON.stringify(b.input),
+            },
+          }));
 
+        // Always send a string content (never null) — required by Cohere and other non-Anthropic models
         result.push({
           role: 'assistant',
-          content: textContent || (null as unknown as string),
-          ...({ tool_calls: toolCalls } as Record<string, unknown>),
-        } as unknown as OpenRouterMessage);
+          content: textContent || '',
+          tool_calls: toolCalls,
+        });
       } else {
         const text = msg.content
-          .filter((b) => b.type === 'text')
-          .map((b) => (b as { type: 'text'; text: string }).text)
+          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .map((b) => b.text)
           .join('');
         result.push({ role: 'assistant', content: text });
       }
@@ -212,9 +208,19 @@ export async function sendRequest(
   messages: Message[],
   maxTokens: number = 4096,
 ): Promise<AgentResponse> {
+  const convertedMessages = convertMessages(messages, systemPrompt);
+
+  console.log('[OpenRouter] Request:', {
+    model,
+    messageCount: convertedMessages.length,
+    toolCount: tools.length,
+    maxTokens,
+  });
+  console.log('[OpenRouter] Messages:', JSON.stringify(convertedMessages, null, 2));
+
   const body = {
     model,
-    messages: convertMessages(messages, systemPrompt),
+    messages: convertedMessages,
     tools: convertTools(tools),
     max_tokens: maxTokens,
   };
@@ -224,7 +230,7 @@ export async function sendRequest(
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
-      'HTTP-Referer': 'https://github.com/vibeshell/vibeshell',
+      'HTTP-Referer': 'https://github.com/toprakpt1/vibeshell',
       'X-Title': 'VibeSHell',
     },
     body: JSON.stringify(body),
@@ -232,9 +238,20 @@ export async function sendRequest(
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error('[OpenRouter] Error:', response.status, errorText);
     throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
   }
 
   const data: OpenRouterResponse = await response.json();
+
+  console.log('[OpenRouter] Response:', {
+    id: data.id,
+    model: data.model,
+    choiceCount: data.choices.length,
+    finishReason: data.choices[0]?.finish_reason,
+    hasContent: !!data.choices[0]?.message.content,
+    toolCallCount: data.choices[0]?.message.tool_calls?.length ?? 0,
+  });
+
   return convertResponse(data);
 }
