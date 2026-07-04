@@ -80,7 +80,7 @@ export class WebSocketClient {
 
       this.ws.onerror = (event: Event) => {
         console.error('[WebSocket] Error:', event);
-        this.onError?.('WebSocket connection error');
+        this.onError?.(`Bridge not reachable at ${this.url} — is the Termux bridge server running?`);
         this.setState('error');
       };
 

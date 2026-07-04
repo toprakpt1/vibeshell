@@ -2,11 +2,13 @@
 // Handles the cycle: user prompt → AI response → tool execution → repeat
 
 import * as bridge from '../bridge/commands';
+import { getBridgeClient } from '../bridge/WebSocketClient';
 import { sendRequest } from './providers/openrouter';
 import { TOOL_DEFINITIONS } from './tools';
 import { Message, ContentBlock, ToolUseBlock, ToolResultBlock } from './types';
 
-const MAX_ITERATIONS = 25; // Safety limit to prevent infinite loops
+const MAX_ITERATIONS = 25;
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 interface AgentLoopCallbacks {
   onAssistantText: (text: string) => void;
@@ -99,6 +101,8 @@ export async function runAgentLoop(
 ): Promise<Message[]> {
   const conversationMessages = [...messages];
   let iterations = 0;
+  let consecutiveFailures = 0;
+  const recentToolCalls: string[] = [];
 
   while (iterations < MAX_ITERATIONS) {
     if (signal?.aborted) {
@@ -145,6 +149,14 @@ export async function runAgentLoop(
         break;
       }
 
+      // Check bridge connection before executing tools
+      const client = getBridgeClient();
+      if (client.state !== 'connected') {
+        const bridgeError = 'Bridge not connected. Please check that the Termux bridge server is running.';
+        callbacks.onError(bridgeError);
+        break;
+      }
+
       // Execute tool calls
       const toolResults: ContentBlock[] = [];
       const toolUseBlocks = assistantContent.filter(
@@ -154,6 +166,23 @@ export async function runAgentLoop(
       for (const toolCall of toolUseBlocks) {
         if (signal?.aborted) break;
 
+        // Detect duplicate tool calls (same tool + same params = stuck in loop)
+        const callSignature = `${toolCall.name}:${JSON.stringify(toolCall.input)}`;
+        recentToolCalls.push(callSignature);
+        if (recentToolCalls.length > 10) recentToolCalls.shift();
+
+        const sameCallCount = recentToolCalls.filter((s) => s === callSignature).length;
+        if (sameCallCount >= 3) {
+          callbacks.onToolResult(toolCall.id, 'Skipped: repeated tool call (model appears stuck)', true);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolCall.id,
+            content: 'Skipped: repeated tool call. Please try a different approach or stop.',
+            is_error: true,
+          } as ToolResultBlock);
+          continue;
+        }
+
         const { result, isError } = await executeTool(
           toolCall.name,
           toolCall.input,
@@ -162,12 +191,35 @@ export async function runAgentLoop(
 
         callbacks.onToolResult(toolCall.id, result, isError);
 
+        // Track consecutive failures
+        if (isError && result.includes('Connection closed')) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            const msg = 'Bridge connection lost. Please check your Termux bridge server and try again.';
+            callbacks.onError(msg);
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content: msg,
+              is_error: true,
+            } as ToolResultBlock);
+            break;
+          }
+        } else {
+          consecutiveFailures = 0;
+        }
+
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolCall.id,
           content: result,
           is_error: isError,
         } as ToolResultBlock);
+      }
+
+      // If we broke out due to consecutive failures, stop the loop
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        break;
       }
 
       // Add tool results as user message
