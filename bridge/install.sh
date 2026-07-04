@@ -91,8 +91,8 @@ setup_token() {
     log_warn "Auth token already exists at ${TOKEN_PATH}, keeping it."
   else
     log_info "Generating auth token..."
-    # Generate a 32-byte random hex token
-    TOKEN=$(head -c 32 /dev/urandom | xxd -p | tr -d '\n')
+    # Generate a 32-byte random hex token using Node.js
+    TOKEN=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
     echo "$TOKEN" > "$TOKEN_PATH"
     chmod 600 "$TOKEN_PATH"
     log_success "Auth token saved to ${TOKEN_PATH}"
