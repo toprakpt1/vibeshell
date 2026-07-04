@@ -30,7 +30,7 @@ fi
 BRIDGE_DIR="$HOME/.vibeshell/bridge"
 TOKEN_PATH="$HOME/.vibeshell-token"
 SERVICE_DIR="$PREFIX/var/service/vibeshell-bridge"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_RAW="https://raw.githubusercontent.com/toprakpt1/vibeshell/master/bridge"
 
 # Colors for terminal output
 RED='\033[0;31m'
@@ -72,9 +72,9 @@ setup_bridge() {
 
   mkdir -p "$BRIDGE_DIR"
 
-  # Copy server files to the persistent bridge location
-  cp "$SCRIPT_DIR/server.js"    "$BRIDGE_DIR/server.js"
-  cp "$SCRIPT_DIR/package.json" "$BRIDGE_DIR/package.json"
+  # Download server files from GitHub
+  curl -sL "$REPO_RAW/server.js"    -o "$BRIDGE_DIR/server.js"
+  curl -sL "$REPO_RAW/package.json" -o "$BRIDGE_DIR/package.json"
 
   log_info "Installing npm dependencies..."
   cd "$BRIDGE_DIR"
