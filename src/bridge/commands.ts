@@ -29,7 +29,8 @@ export async function exec(
 /** Read a file's contents */
 export async function readFile(path: string): Promise<string> {
   const client = getBridgeClient();
-  return client.send<string>('read_file', { path });
+  const response = await client.send<{ content: string; path: string }>('read_file', { path });
+  return response.content;
 }
 
 /** Write content to a file (creates parent directories if needed) */
@@ -41,7 +42,8 @@ export async function writeFile(path: string, content: string): Promise<void> {
 /** List directory contents */
 export async function listDir(path: string): Promise<ListDirEntry[]> {
   const client = getBridgeClient();
-  return client.send<ListDirEntry[]>('list_dir', { path });
+  const response = await client.send<{ path: string; entries: ListDirEntry[] }>('list_dir', { path });
+  return response.entries;
 }
 
 /** Delete a file */

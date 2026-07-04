@@ -6,6 +6,7 @@ import { useWorkspaces } from '../src/store/useWorkspaces';
 import { useBridgeStore } from '../src/store/useBridgeStore';
 import { ConnectionStatus, WorkspaceCard } from '../src/components';
 import { theme } from '../src/theme';
+import * as bridge from '../src/bridge/commands';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -22,10 +23,17 @@ export default function HomeScreen() {
 
   const handleCreateWorkspace = () => {
     if (newName.trim() && newPath.trim()) {
-      const workspace = addWorkspace(newName.trim(), newPath.trim());
+      const pathValue = newPath.trim();
+      const workspace = addWorkspace(newName.trim(), pathValue);
       setIsAdding(false);
       setNewName('');
       setNewPath('~/projects/');
+      
+      // Ensure directory exists in Termux if connected
+      if (useBridgeStore.getState().connectionState === 'connected') {
+        bridge.exec(`mkdir -p ${pathValue}`).catch(console.error);
+      }
+      
       handleOpenWorkspace(workspace.id);
     }
   };

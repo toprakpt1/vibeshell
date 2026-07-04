@@ -39,17 +39,23 @@ async function executeTool(
       }
 
       case 'read_file': {
-        const content = await bridge.readFile(input.path as string);
+        const p = input.path as string;
+        const fullPath = p.startsWith('/') || p.startsWith('~/') ? p : `${workspacePath}/${p}`;
+        const content = await bridge.readFile(fullPath);
         return { result: content, isError: false };
       }
 
       case 'write_file': {
-        await bridge.writeFile(input.path as string, input.content as string);
-        return { result: `File written: ${input.path}`, isError: false };
+        const p = input.path as string;
+        const fullPath = p.startsWith('/') || p.startsWith('~/') ? p : `${workspacePath}/${p}`;
+        await bridge.writeFile(fullPath, input.content as string);
+        return { result: `File written: ${fullPath}`, isError: false };
       }
 
       case 'list_dir': {
-        const entries = await bridge.listDir(input.path as string);
+        const p = input.path as string;
+        const fullPath = p.startsWith('/') || p.startsWith('~/') ? p : `${workspacePath}/${p}`;
+        const entries = await bridge.listDir(fullPath);
         const formatted = entries
           .map((e) => `${e.type === 'directory' ? '📁' : '📄'} ${e.name}${e.size ? ` (${e.size}b)` : ''}`)
           .join('\n');
@@ -57,9 +63,11 @@ async function executeTool(
       }
 
       case 'apply_patch': {
+        const p = input.path as string;
+        const fullPath = p.startsWith('/') || p.startsWith('~/') ? p : `${workspacePath}/${p}`;
         // Apply patch via shell command
         const result = await bridge.exec(
-          `echo ${JSON.stringify(input.diff)} | patch ${JSON.stringify(input.path)}`,
+          `echo ${JSON.stringify(input.diff)} | patch ${JSON.stringify(fullPath)}`,
           workspacePath,
         );
         return {

@@ -92,9 +92,13 @@ function convertMessages(
     { role: 'system', content: systemPrompt },
   ];
 
+  let pendingToolCallIds: string[] = [];
+
   for (const msg of messages) {
     if (msg.role === 'user') {
       const textBlocks: OpenRouterContentBlock[] = [];
+      const resolvedToolIds = new Set<string>();
+
       for (const block of msg.content) {
         if (block.type === 'text') {
           textBlocks.push({ type: 'text', text: block.text });
@@ -105,9 +109,21 @@ function convertMessages(
             content: block.content,
             tool_call_id: block.tool_use_id,
           });
+          resolvedToolIds.add(block.tool_use_id);
           continue;
         }
       }
+
+      const unresolvedToolIds = pendingToolCallIds.filter(id => !resolvedToolIds.has(id));
+      for (const id of unresolvedToolIds) {
+        result.push({
+          role: 'tool',
+          content: 'Error: Tool execution was interrupted or failed before completion.',
+          tool_call_id: id,
+        });
+      }
+      pendingToolCallIds = [];
+
       if (textBlocks.length > 0) {
         result.push({
           role: 'user',
@@ -118,6 +134,17 @@ function convertMessages(
         });
       }
     } else if (msg.role === 'assistant') {
+      if (pendingToolCallIds.length > 0) {
+        for (const id of pendingToolCallIds) {
+          result.push({
+            role: 'tool',
+            content: 'Error: Tool execution was interrupted.',
+            tool_call_id: id,
+          });
+        }
+        pendingToolCallIds = [];
+      }
+
       const hasToolCalls = msg.content.some((b) => b.type === 'tool_use');
       if (hasToolCalls) {
         const textContent = msg.content
@@ -135,6 +162,8 @@ function convertMessages(
             },
           }));
 
+        pendingToolCallIds = toolCalls.map(tc => tc.id);
+
         // Always send a string content (never null) — required by Cohere and other non-Anthropic models
         result.push({
           role: 'assistant',
@@ -149,6 +178,17 @@ function convertMessages(
         result.push({ role: 'assistant', content: text });
       }
     }
+  }
+
+  if (pendingToolCallIds.length > 0) {
+    for (const id of pendingToolCallIds) {
+      result.push({
+        role: 'tool',
+        content: 'Error: Tool execution was interrupted or failed before completion.',
+        tool_call_id: id,
+      });
+    }
+    pendingToolCallIds = [];
   }
 
   return result;

@@ -67,8 +67,14 @@ function send(ws, payload) {
 
 /** Resolve a path, preventing trivial directory-traversal attacks. */
 function safePath(basePath) {
+  let resolvedBase = basePath;
+  if (typeof resolvedBase === 'string' && resolvedBase.startsWith('~/')) {
+    resolvedBase = path.join(os.homedir(), resolvedBase.slice(2));
+  } else if (resolvedBase === '~') {
+    resolvedBase = os.homedir();
+  }
   // Resolve to absolute, collapse ../ segments
-  return path.resolve(basePath);
+  return path.resolve(resolvedBase);
 }
 
 // ---------------------------------------------------------------------------
