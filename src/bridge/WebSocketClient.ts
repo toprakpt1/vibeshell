@@ -62,11 +62,14 @@ export class WebSocketClient {
 
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
-        // Send auth token as first message
+        // Send auth token as first message (server expects just { token: "..." })
+        // Don't set connected state yet - wait for auth response
         if (this.authToken) {
-          this.ws?.send(JSON.stringify({ type: 'auth', token: this.authToken }));
+          this.ws?.send(JSON.stringify({ token: this.authToken }));
+        } else {
+          // No token configured - still set as connected
+          this.setState('connected');
         }
-        this.setState('connected');
       };
 
       this.ws.onmessage = (event: WebSocketMessageEvent) => {
@@ -158,7 +161,20 @@ export class WebSocketClient {
     }
   }
 
-  private handleMessage(data: BridgeResponse | BridgeStreamMessage): void {
+  private handleMessage(data: BridgeResponse | BridgeStreamMessage | { authenticated: boolean }): void {
+    // Handle auth response
+    if ('authenticated' in data) {
+      if (data.authenticated) {
+        console.log('[WebSocket] Authentication successful');
+        this.setState('connected');
+      } else {
+        console.error('[WebSocket] Authentication failed');
+        this.setState('error');
+        this.ws?.close();
+      }
+      return;
+    }
+
     const id = data.id;
     const pending = this.pendingRequests.get(id);
     if (!pending) return;
@@ -175,7 +191,10 @@ export class WebSocketClient {
 
     const response = data as BridgeResponse;
     if (response.error) {
-      pending.reject(new Error(response.error.message));
+      const errorMsg = typeof response.error === 'string' 
+        ? response.error 
+        : response.error.message;
+      pending.reject(new Error(errorMsg));
     } else {
       pending.resolve(response.result);
     }
