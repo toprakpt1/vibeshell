@@ -13,6 +13,7 @@ export const AVAILABLE_MODELS = [
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'openrouter' },
   { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'openrouter' },
   { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', provider: 'openrouter' },
+  { id: 'cohere/north-mini-code:free', name: 'Cohere North Mini (Free)', provider: 'openrouter' },
 ] as const;
 
 export type ModelId = typeof AVAILABLE_MODELS[number]['id'];

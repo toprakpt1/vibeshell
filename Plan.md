@@ -97,30 +97,34 @@
 
 ## 5. Geliştirme Fazları
 
-### Faz 0 — Prototip (1-2 hafta)
-- Bridge server'ın minimal versiyonu (sadece exec + read/write file)
-- RN tarafında WebSocket bağlantısı + basit chat UI
-- Tek bir hardcoded workspace ile "prompt → dosya oluştur" akışını uçtan uca çalıştır
+### Faz 0 — Prototip (1-2 hafta) ✅ TAMAMLANDI
+- [x] Bridge server'ın minimal versiyonu (sadece exec + read/write file)
+- [x] RN tarafında WebSocket bağlantısı + basit chat UI
+- [x] Tek bir hardcoded workspace ile "prompt → dosya oluştur" akışını uçtan uca çalıştır
 
-### Faz 1 — MVP
-- API key + model seçimi ayarları
-- Gerçek agent loop (tool use, multi-turn)
-- Diff viewer + onay akışı
-- Workspace yönetimi (birden fazla proje)
-- Kurulum onboarding akışı
+### Faz 1 — MVP ✅ TAMAMLANDI
+- [x] API key + model seçimi ayarları
+- [x] Gerçek agent loop (tool use, multi-turn)
+- [x] Diff viewer + onay akışı
+- [x] Workspace yönetimi (birden fazla proje)
+- [x] Kurulum onboarding akışı (otomatik yönlendirme, inline token girişi, bağlantı kontrolü)
+- [x] Ücretsiz model desteği (Cohere North Mini)
 
-### Faz 2 — Kullanılabilirlik
-- Terminal stream görünümü
-- Dosya gezgini + syntax highlight
-- Git entegrasyonu (commit/push, PR açma — GitHub API ile)
-- Background task + push notification
-- Session geçmişi (SQLite ile local persistence — DayShot'taki pattern)
+### Faz 2 — Kullanılabilirlik 🔲 BAŞLANMADI
+- [ ] Terminal stream görünümü
+- [ ] Dosya gezgini + syntax highlight
+- [ ] Git entegrasyonu (commit/push, PR açma — GitHub API ile)
+- [ ] Background task + push notification
+- [ ] Session geçmişi (SQLite ile local persistence — DayShot'taki pattern)
 
-### Faz 3 — Cilalama / Topluluk
-- Çoklu provider desteği (OpenRouter ile model çeşitliliği)
-- Özelleştirilebilir sistem promptları / agent "personaları" (senin bug bounty KB'deki SKILL.md fikrine benzer şekilde, kullanıcı kendi agent kimliklerini tanımlayabilir)
-- Termux kurulum scriptini otomatikleştirme (RUN_COMMAND intent ile tek tıkla kurulum)
-- README + katkı rehberi, F-Droid metadata
+### Faz 3 — Cilalama / Topluluk 🟡 KISMEN
+- [x] Çoklu provider desteği (OpenRouter ile model çeşitliliği)
+- [x] Ücretsiz model desteği (Cohere North Mini — test için)
+- [x] Özelleştirilebilir sistem promptları
+- [x] Uncodixify redesign (teal accent, reduced border radii, token fixes)
+- [ ] README + katkı rehberi
+- [ ] F-Droid metadata
+- [ ] Termux kurulum scriptini otomatikleştirme (RUN_COMMAND intent ile tek tıkla kurulum)
 
 ---
 
