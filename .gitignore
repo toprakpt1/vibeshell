@@ -28,6 +28,10 @@ yarn-error.*
 
 # macOS
 .DS_Store
+
+# Native build artifacts
+native-build/work/
+native-build/output/
 *.pem
 
 # local env files

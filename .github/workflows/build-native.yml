@@ -1,0 +1,95 @@
+name: Build Native Assets
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: 'Upload to latest release'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build-rootfs:
+    name: Build Rootfs and Proot
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        arch: [arm64-v8a, armeabi-v7a]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl tar xz-utils
+      
+      - name: Build rootfs for ${{ matrix.arch }}
+        run: |
+          cd native-build
+          ./build-rootfs.sh ${{ matrix.arch }}
+      
+      - name: Download proot binary for ${{ matrix.arch }}
+        run: |
+          cd native-build
+          ./get-proot-binary.sh download ${{ matrix.arch }}
+      
+      - name: Create checksums
+        run: |
+          cd native-build/output
+          sha256sum * > checksums-${{ matrix.arch }}.txt
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-assets-${{ matrix.arch }}
+          path: native-build/output/*
+          retention-days: 7
+      
+      - name: Upload to Release
+        if: github.event_name == 'release' || inputs.upload_to_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            native-build/output/vibeshell-rootfs-${{ matrix.arch }}.tar.xz
+            native-build/output/vibeshell-rootfs-${{ matrix.arch }}.tar.xz.sha256
+            native-build/output/proot-${{ matrix.arch }}
+            native-build/output/checksums-${{ matrix.arch }}.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+  summarize:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: build-rootfs
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-assets
+      
+      - name: Display summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Native Assets Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for arch in arm64-v8a armeabi-v7a; do
+            echo "#### $arch" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            ls -lh all-assets/native-assets-$arch/ >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "### Total Size" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          du -sh all-assets/ >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

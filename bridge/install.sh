@@ -1,186 +1,292 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/bin/sh
 # ============================================================================
-# VibeSHell Bridge — Termux Installation Script
+# VibeSHell Bridge — Installation Script (Proot-based, Termux-free)
 #
-# This script sets up the VibeSHell bridge server inside Termux:
-#   1. Installs Node.js LTS and required packages
-#   2. Copies the bridge server to a persistent location
-#   3. Generates an auth token
-#   4. Sets up termux-services for auto-start
-#   5. Acquires a wake-lock to prevent Android from killing the process
+# Bu script VibeSHell bridge sunucusunu proot ile Debian rootfs içinde kurar.
+# Termux gerektirmez — herhangi bir Linux veya Android terminalinde çalışabilir.
 #
-# Usage:
+# Adımlar:
+#   1. Proot binary'sini indirir (yoksa)
+#   2. Debian rootfs oluşturur (yoksa)
+#   3. Node.js ve git kurar
+#   4. Bridge kodunu rootfs'e kopyalar
+#   5. Auth token oluşturur
+#   6. Startup scriptleri oluşturur
+#
+# Kullanım:
 #   chmod +x install.sh && ./install.sh
+#
+# Notlar:
+#   - Android'de foreground service için React Native tarafında
+#     ProotModule ve BridgeForegroundService zaten mevcut.
+#   - Bu script sadece proot ortamını hazırlar.
 # ============================================================================
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Early Termux check (before using $PREFIX)
+# Sabitler
 # ---------------------------------------------------------------------------
-if [ ! -d "/data/data/com.termux" ]; then
-  echo "[ERROR] This script must be run inside Termux."
-  echo "        Install Termux from https://f-droid.org/en/packages/com.termux/"
-  exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-BRIDGE_DIR="$HOME/.vibeshell/bridge"
-TOKEN_PATH="$HOME/.vibeshell-token"
-SERVICE_DIR="$PREFIX/var/service/vibeshell-bridge"
+VIBESHELL_DIR="${HOME}/.vibeshell"
+BRIDGE_DIR="${VIBESHELL_DIR}/bridge"
+PROOT_DIR="${VIBESHELL_DIR}/proot"
+ROOTFS_DIR="${VIBESHELL_DIR}/rootfs"
+TOKEN_PATH="${HOME}/.vibeshell-token"
 REPO_RAW="https://raw.githubusercontent.com/toprakpt1/vibeshell/master/bridge"
 
-# Colors for terminal output
+# Renkler
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Yardımcılar
 # ---------------------------------------------------------------------------
 log_info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
 log_success() { echo -e "${GREEN}[OK]${NC}    $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
-check_termux() {
-  : # Already checked at script startup
+detect_arch() {
+  local arch
+  arch=$(uname -m)
+  case "$arch" in
+    aarch64|arm64) echo "aarch64" ;;
+    armv7*|armhf)  echo "arm" ;;
+    x86_64)        echo "x86_64" ;;
+    i*86)          echo "i686" ;;
+    *)
+      log_error "Desteklenmeyen mimari: $arch"
+      exit 1
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
-# Step 1: Install system dependencies
+# Adım 1: Proot binary'sini indir
 # ---------------------------------------------------------------------------
-install_packages() {
-  log_info "Updating package index..."
-  pkg update -y
+install_proot() {
+  log_info "Proot kuruluyor..."
 
-  log_info "Installing Node.js LTS and required packages..."
-  pkg install -y nodejs-lts git termux-services termux-api
+  mkdir -p "$PROOT_DIR"
 
-  log_success "System packages installed."
-}
+  local arch proot_url
+  arch=$(detect_arch)
+  proot_url="https://github.com/proot-me/proot/releases/download/v5.4.0/proot-v5.4.0-${arch}-static"
 
-# ---------------------------------------------------------------------------
-# Step 2: Set up bridge directory and install npm dependencies
-# ---------------------------------------------------------------------------
-setup_bridge() {
-  log_info "Setting up bridge directory at ${BRIDGE_DIR}..."
+  local proot_bin="${PROOT_DIR}/proot"
 
-  mkdir -p "$BRIDGE_DIR"
-
-  # Download server files from GitHub
-  curl -sL "$REPO_RAW/server.js"    -o "$BRIDGE_DIR/server.js"
-  curl -sL "$REPO_RAW/package.json" -o "$BRIDGE_DIR/package.json"
-
-  log_info "Installing npm dependencies..."
-  cd "$BRIDGE_DIR"
-  npm install --production
-
-  log_success "Bridge server installed at ${BRIDGE_DIR}."
-}
-
-# ---------------------------------------------------------------------------
-# Step 3: Generate authentication token
-# ---------------------------------------------------------------------------
-setup_token() {
-  if [ -f "$TOKEN_PATH" ] && [ -s "$TOKEN_PATH" ]; then
-    log_warn "Auth token already exists at ${TOKEN_PATH}, keeping it."
+  if [ -f "$proot_bin" ]; then
+    log_warn "Proot zaten mevcut: $proot_bin"
   else
-    log_info "Generating auth token..."
-    # Generate a 32-byte random hex token using Node.js
-    TOKEN=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
-    echo "$TOKEN" > "$TOKEN_PATH"
-    chmod 600 "$TOKEN_PATH"
-    log_success "Auth token saved to ${TOKEN_PATH}"
+    log_info "Proot indiriliyor: $proot_url"
+    curl -sL "$proot_url" -o "$proot_bin"
+    chmod +x "$proot_bin"
+    log_success "Proot indirildi: $proot_bin"
   fi
 }
 
 # ---------------------------------------------------------------------------
-# Step 4: Set up termux-services for auto-start
+# Adım 2: Debian rootfs
 # ---------------------------------------------------------------------------
-setup_service() {
-  log_info "Setting up termux-services..."
+setup_rootfs() {
+  if [ -d "$ROOTFS_DIR" ] && [ -f "$ROOTFS_DIR/usr/bin/node" ]; then
+    log_warn "Rootfs zaten mevcut ve Node.js kurulu: $ROOTFS_DIR"
+    return 0
+  fi
 
-  # Create the service directory structure (runit-style)
-  mkdir -p "$SERVICE_DIR/log"
+  log_info "Debian rootfs oluşturuluyor..."
 
-  # Main run script — starts the bridge server
-  cat > "$SERVICE_DIR/run" << 'RUNEOF'
-#!/data/data/com.termux/files/usr/bin/bash
-exec 2>&1
-BRIDGE_DIR="$HOME/.vibeshell/bridge"
-cd "$BRIDGE_DIR"
-exec node server.js
-RUNEOF
-  chmod +x "$SERVICE_DIR/run"
+  local arch
+  arch=$(detect_arch)
+  local deb_arch
+  case "$arch" in
+    aarch64)  deb_arch="arm64" ;;
+    arm)      deb_arch="armhf" ;;
+    x86_64)   deb_arch="amd64" ;;
+    i686)     deb_arch="i386" ;;
+  esac
 
-  # Log run script — captures output with svlogd
-  cat > "$SERVICE_DIR/log/run" << 'LOGEOF'
-#!/data/data/com.termux/files/usr/bin/bash
-LOG_DIR="$HOME/.vibeshell/logs"
-mkdir -p "$LOG_DIR"
-exec svlogd -tt "$LOG_DIR"
-LOGEOF
-  chmod +x "$SERVICE_DIR/log/run"
+  # debootstrap ile rootfs oluştur (sudo gerekli)
+  if command -v debootstrap >/dev/null 2>&1; then
+    log_info "debootstrap ile Debian bookworm kuruluyor..."
+    sudo debootstrap --arch="$deb_arch" --variant=minbase \
+      --include=busybox,util-linux,procps \
+      bookworm "$ROOTFS_DIR" https://deb.debian.org/debian/
+  else
+    log_warn "debootstrap bulunamadı"
+    log_info "debootstrap kurulmaya çalışılıyor..."
 
-  # Enable the service (will start on next sv-enable or boot)
-  sv-enable vibeshell-bridge 2>/dev/null || true
+    # Debian tabanlı sistemlerde debootstrap'u kur
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq debootstrap
+      sudo debootstrap --arch="$deb_arch" --variant=minbase \
+        --include=busybox,util-linux,procps \
+        bookworm "$ROOTFS_DIR" https://deb.debian.org/debian/
+    else
+      log_error "debootstrap kurulamadı. Manuel kurulum gerekli."
+      log_info "Alternatif: https://github.com/nicknisi/dotfiles/raw/main/debian-rootfs.tar.gz"
+      log_info "İndirip ${ROOTFS_DIR}/ dizinine çıkarın."
+      exit 1
+    fi
+  fi
 
-  log_success "Service 'vibeshell-bridge' registered."
-  log_info "Control with: sv start|stop|restart vibeshell-bridge"
+  # Gerekli dizinleri oluştur
+  mkdir -p "$ROOTFS_DIR"/{dev,proc,sys,tmp,root/bridge}
+  chmod 1777 "$ROOTFS_DIR/tmp"
+
+  log_success "Rootfs hazır: $ROOTFS_DIR"
 }
 
 # ---------------------------------------------------------------------------
-# Step 5: Acquire wake-lock
+# Adım 3: Node.js ve git kur
 # ---------------------------------------------------------------------------
-setup_wakelock() {
-  log_info "Acquiring Termux wake-lock to prevent process suspension..."
+install_packages() {
+  log_info "Proot ortamında Node.js ve git kuruluyor..."
 
-  # termux-wake-lock prevents Android from dozing the process
-  termux-wake-lock 2>/dev/null || {
-    log_warn "Could not acquire wake-lock. The bridge may be suspended by Android."
-    log_warn "You can manually run: termux-wake-lock"
-  }
+  local proot_bin="${PROOT_DIR}/proot"
+  local bash_bin="/bin/bash"
+  [ ! -f "$ROOTFS_DIR/bin/bash" ] && bash_bin="/bin/sh"
 
-  log_success "Wake-lock acquired."
+  $proot_bin -0 -r "$ROOTFS_DIR" \
+    -b /dev \
+    -b /proc \
+    -b /sys \
+    -w /root \
+    $bash_bin -c '
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq curl git ca-certificates gnupg 2>/dev/null
+
+      # Node.js 22.x kur
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y -qq nodejs 2>/dev/null
+
+      # Versiyonları kontrol et
+      echo "--- Kurulum Sonuçları ---"
+      node --version
+      npm --version
+      git --version
+  '
+
+  log_success "Node.js ve git kuruldu."
 }
 
 # ---------------------------------------------------------------------------
-# Main
+# Adım 4: Bridge kodunu kopyala
+# ---------------------------------------------------------------------------
+setup_bridge() {
+  log_info "Bridge kodu kopyalanıyor..."
+
+  local bridge_dest="${ROOTFS_DIR}/root/bridge"
+  mkdir -p "$bridge_dest"
+
+  # Bridge dosyalarını kopyala
+  if [ -f "${BRIDGE_DIR}/server.js" ]; then
+    cp "${BRIDGE_DIR}/server.js" "$bridge_dest/"
+    cp "${BRIDGE_DIR}/package.json" "$bridge_dest/"
+  else
+    log_info "Bridge dosyaları GitHub'dan indiriliyor..."
+    mkdir -p "$BRIDGE_DIR"
+    curl -sL "$REPO_RAW/server.js" -o "$bridge_dest/server.js"
+    curl -sL "$REPO_RAW/package.json" -o "$bridge_dest/package.json"
+  fi
+
+  # npm bağımlılıklarını kur
+  local proot_bin="${PROOT_DIR}/proot"
+  if [ -f "$proot_bin" ] && [ -f "$bridge_dest/package.json" ]; then
+    log_info "npm bağımlılıkları kuruluyor..."
+    $proot_bin -0 -r "$ROOTFS_DIR" \
+      -b /dev \
+      -b /proc \
+      -w /root/bridge \
+      /usr/bin/npm install --production
+  fi
+
+  log_success "Bridge kodu hazır: $bridge_dest"
+}
+
+# ---------------------------------------------------------------------------
+# Adım 5: Auth token
+# ---------------------------------------------------------------------------
+setup_token() {
+  if [ -f "$TOKEN_PATH" ] && [ -s "$TOKEN_PATH" ]; then
+    log_warn "Auth token zaten mevcut: $TOKEN_PATH"
+  else
+    log_info "Auth token oluşturuluyor..."
+    TOKEN=$(openssl rand -hex 32 2>/dev/null || \
+            node -e "console.log(require('crypto').randomBytes(32).toString('hex'))" 2>/dev/null || \
+            cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 64 | head -n 1)
+    echo "$TOKEN" > "$TOKEN_PATH"
+    chmod 600 "$TOKEN_PATH"
+    log_success "Auth token oluşturuldu: $TOKEN_PATH"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Adım 6: Scriptleri kopyala
+# ---------------------------------------------------------------------------
+setup_scripts() {
+  log_info "Scriptler hazırlanıyor..."
+
+  mkdir -p "$VIBESHELL_DIR"
+
+  # start.sh, stop.sh, status.sh'yi bridge/ dizininden kopyala
+  for script in start.sh stop.sh status.sh; do
+    if [ -f "${BRIDGE_DIR}/${script}" ]; then
+      cp "${BRIDGE_DIR}/${script}" "${VIBESHELL_DIR}/${script}"
+      chmod +x "${VIBESHELL_DIR}/${script}"
+    fi
+  done
+
+  log_success "Scriptler hazır: ${VIBESHELL_DIR}/{start,stop,status}.sh"
+}
+
+# ---------------------------------------------------------------------------
+# Ana kurulum
 # ---------------------------------------------------------------------------
 main() {
   echo ""
   echo "==========================================="
-  echo "  VibeSHell Bridge — Termux Installer"
+  echo "  VibeSHell Bridge — Proot Installer"
+  echo "  (Termux bağımsız)"
   echo "==========================================="
   echo ""
 
-  check_termux
+  mkdir -p "$VIBESHELL_DIR"
+
+  install_proot
+  setup_rootfs
   install_packages
   setup_bridge
   setup_token
-  setup_service
-  setup_wakelock
+  setup_scripts
 
   echo ""
   echo "==========================================="
-  log_success "Installation complete!"
+  log_success "Kurulum tamamlandı!"
   echo "==========================================="
   echo ""
-  log_info "Bridge directory:  ${BRIDGE_DIR}"
-  log_info "Auth token:        ${TOKEN_PATH}"
-  log_info "Logs:              ~/.vibeshell/logs/"
+  log_info "Dizinler:"
+  log_info "  Proot:    ${PROOT_DIR}"
+  log_info "  Rootfs:   ${ROOTFS_DIR}"
+  log_info "  Bridge:   ${ROOTFS_DIR}/root/bridge"
+  log_info "  Token:    ${TOKEN_PATH}"
   echo ""
-  log_info "To start now:      sv start vibeshell-bridge"
-  log_info "To check status:   sv status vibeshell-bridge"
-  log_info "To view logs:      cat ~/.vibeshell/logs/current"
+  log_info "Kullanım:"
+  log_info "  Başlat:   ${VIBESHELL_DIR}/start.sh"
+  log_info "  Durdur:   ${VIBESHELL_DIR}/stop.sh"
+  log_info "  Durum:    ${VIBESHELL_DIR}/status.sh"
+  log_info "  Log:      ${VIBESHELL_DIR}/bridge.log"
   echo ""
-  log_info "Your auth token:"
+  log_info "Auth token:"
   echo -e "  ${GREEN}$(cat "$TOKEN_PATH")${NC}"
+  echo ""
+  log_info "Android'de foreground service ile başlatmak için:"
+  log_info "  Uygulamayı açın → Bridge otomatik başlayacaktır."
   echo ""
 }
 

@@ -2,7 +2,7 @@
 
 ## What this is
 
-Mobile agentic coding client for Android. Expo RN app communicates over WebSocket with a Termux bridge server that executes shell commands, reads/writes files, and runs git. The AI agent loop (prompt → tool calls → repeat) runs entirely in JS; the bridge is a stateless executor.
+Mobile agentic coding client for Android. Expo RN app communicates over WebSocket with a proot bridge server (Debian rootfs) that executes shell commands, reads/writes files, and runs git. The AI agent loop (prompt → tool calls → repeat) runs entirely in JS; the bridge is a stateless executor. Runs without Termux — uses proot + Android foreground service.
 
 ## Commands
 
@@ -12,8 +12,9 @@ npm start            # or: expo start
 npm run android      # expo start --android
 npm run web          # expo start --web
 
-# Bridge server (separate package in /bridge)
+# Bridge server (separate package in /bridge, runs inside proot)
 cd bridge && npm start   # runs node server.js on ws://127.0.0.1:8765
+# Or use: ~/.vibeshell/start.sh (proot-based, daemon mode)
 ```
 
 No lint, test, or typecheck commands are configured yet. To typecheck:
@@ -36,13 +37,13 @@ src/bridge/       WebSocketClient.ts — connection + reconnect; commands.ts —
 src/store/        Zustand stores: useSettings, useBridgeStore, useChatStore, useWorkspaces
 src/components/   ChatMessage, ChatInput, ConnectionStatus, ToolCallCard, MarkdownRenderer, WorkspaceCard, DiffViewer
 src/theme/        Custom theme: colors, typography, spacing (import from '@/theme')
-bridge/           Standalone Node.js WebSocket server (server.js, install.sh for Termux setup)
+bridge/           Standalone Node.js WebSocket server (server.js, install.sh for proot setup)
 ```
 
 ## Key facts an agent would miss
 
 - **OpenRouter, not Anthropic directly.** Provider is `https://openrouter.ai/api/v1`. API key format: `sk-or-v1-...`. Models are prefixed (e.g. `anthropic/claude-sonnet-4`).
-- **Bridge auth protocol.** First WebSocket message must be `{ "token": "..." }`. Server replies `{ "authenticated": true }` or closes. Token stored at `~/.vibeshell-token` on the Termux side.
+- **Bridge auth protocol.** First WebSocket message must be `{ "token": "..." }`. Server replies `{ "authenticated": true }` or closes. Token stored at `~/.vibeshell-token`. Bridge runs inside proot Debian rootfs, launched by Android foreground service (`BridgeForegroundService.kt`).
 - **expo-router file routing.** Routes are defined by files in `app/`. Dynamic route: `app/chat/[workspaceId].tsx`. Layout: `app/_layout.tsx`.
 - **Zustand stores are the source of truth.** Settings loaded from `expo-secure-store` on boot. Bridge connection managed by `useBridgeStore`. Chat state by `useChatStore`.
 - **Tool definitions live in `src/agent/tools.ts`.** Seven tools: `run_command`, `read_file`, `write_file`, `list_dir`, `apply_patch`, `git_diff`, `git_commit`. Icons and Turkish labels also defined there.

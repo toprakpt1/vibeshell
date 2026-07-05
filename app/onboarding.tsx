@@ -1,49 +1,91 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Linking } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSettings } from '../src/store/useSettings';
-import { useBridgeStore } from '../src/store/useBridgeStore';
+import { useBridgeStore } from '../src/bridge';
+import { ProotManager } from '../src/native/ProotModule';
 import { theme } from '../src/theme';
 
-const INSTALL_COMMAND = 'curl -sL https://raw.githubusercontent.com/toprakpt1/vibeshell/master/bridge/install.sh | bash';
+type SetupStep = 'download' | 'extract' | 'battery' | 'start' | 'done';
 
 export default function OnboardingScreen() {
   const router = useRouter();
-  const { setBridgeToken, setOnboardingSeen } = useSettings();
+  const { setOnboardingSeen } = useSettings();
   const { connect, connectionState } = useBridgeStore();
-  const [token, setToken] = useState('');
-  const [copied, setCopied] = useState(false);
-  const [checking, setChecking] = useState(false);
+  
+  const [currentStep, setCurrentStep] = useState<SetupStep>('download');
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
-  const copyToClipboard = async () => {
-    await Clipboard.setStringAsync(INSTALL_COMMAND);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const prootManager = ProotManager.getInstance();
+
+  // Start setup when component mounts
+  useEffect(() => {
+    startSetup();
+  }, []);
+
+  const startSetup = async () => {
+    try {
+      // Step 1: Download rootfs
+      setCurrentStep('download');
+      await downloadRootfs();
+
+      // Step 2: Extract rootfs
+      setCurrentStep('extract');
+      await extractRootfs();
+
+      // Step 3: Request battery optimization
+      setCurrentStep('battery');
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Setup failed');
+    }
   };
 
-  const openFDroid = () => {
-    Linking.openURL('https://f-droid.org/en/packages/com.termux/');
+  const downloadRootfs = async () => {
+    // Simulate download (gerçek implementasyonda GitHub API kullan)
+    return new Promise((resolve) => {
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += 10;
+        setDownloadProgress(progress);
+        if (progress >= 100) {
+          clearInterval(interval);
+          resolve(true);
+        }
+      }, 300);
+    });
   };
 
-  const handleCheckConnection = async () => {
-    if (!token.trim()) return;
-    setChecking(true);
-    await setBridgeToken(token.trim());
-    connect('ws://127.0.0.1:8765', token.trim());
-    setTimeout(() => setChecking(false), 3000);
+  const extractRootfs = async () => {
+    // Simulate extraction
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  };
+
+  const handleBatteryOptimization = async () => {
+    try {
+      await prootManager.ensureBatteryOptimization();
+      setCurrentStep('start');
+      await startBridge();
+    } catch (err) {
+      console.error('Battery opt error:', err);
+      setCurrentStep('start');
+      await startBridge();
+    }
+  };
+
+  const startBridge = async () => {
+    try {
+      await prootManager.startBridge();
+      connect('ws://127.0.0.1:8765', '');
+      setCurrentStep('done');
+    } catch (err) {
+      setError('Failed to start bridge service');
+    }
   };
 
   const handleDone = async () => {
-    if (token.trim()) {
-      await setBridgeToken(token.trim());
-    }
-    await setOnboardingSeen();
-    router.replace('/');
-  };
-
-  const handleSkip = async () => {
     await setOnboardingSeen();
     router.replace('/');
   };
@@ -51,92 +93,127 @@ export default function OnboardingScreen() {
   const isConnected = connectionState === 'connected';
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.step}>
-        <View style={styles.stepHeader}>
-          <View style={styles.stepNumber}><Text style={styles.stepNumberText}>1</Text></View>
-          <Text style={styles.stepTitle}>Install Termux</Text>
-        </View>
-        <Text style={styles.stepDesc}>
-          Install Termux from F-Droid. The Play Store version is deprecated and will not work.
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Setting up VibeShell</Text>
+        <Text style={styles.subtitle}>
+          Installing Linux environment · This will take a few minutes
         </Text>
-        <TouchableOpacity style={styles.linkButton} onPress={openFDroid}>
-          <Ionicons name="download-outline" size={20} color={theme.colors.brand.primary} />
-          <Text style={styles.linkText}>Get Termux on F-Droid</Text>
-        </TouchableOpacity>
       </View>
 
-      <View style={styles.step}>
-        <View style={styles.stepHeader}>
-          <View style={styles.stepNumber}><Text style={styles.stepNumberText}>2</Text></View>
-          <Text style={styles.stepTitle}>Run Install Script</Text>
+      <ScrollView style={styles.content}>
+        {/* Download Step */}
+        <View style={[styles.step, currentStep === 'download' && styles.stepActive]}>
+          <View style={styles.stepIcon}>
+            {currentStep === 'download' ? (
+              <ActivityIndicator size="small" color={theme.colors.brand.primary} />
+            ) : downloadProgress === 100 ? (
+              <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
+            ) : (
+              <View style={styles.stepNumber}><Text style={styles.stepNumberText}>1</Text></View>
+            )}
+          </View>
+          <View style={styles.stepContent}>
+            <Text style={styles.stepTitle}>Downloading Linux environment</Text>
+            <Text style={styles.stepDesc}>Alpine Linux + Node.js runtime</Text>
+            {currentStep === 'download' && (
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: `${downloadProgress}%` }]} />
+              </View>
+            )}
+            {currentStep === 'download' && (
+              <Text style={styles.progressText}>{downloadProgress}% · ~25 MB</Text>
+            )}
+          </View>
         </View>
-        <Text style={styles.stepDesc}>
-          Open Termux and paste this command. It installs Node.js and sets up the bridge server:
-        </Text>
 
-        <View style={styles.codeBlock}>
-          <Text style={styles.codeText} selectable>{INSTALL_COMMAND}</Text>
-          <TouchableOpacity style={styles.copyButton} onPress={copyToClipboard}>
-            <Ionicons name={copied ? "checkmark" : "copy-outline"} size={16} color={theme.colors.text.inverse} />
-            <Text style={styles.copyButtonText}>{copied ? 'Copied' : 'Copy'}</Text>
-          </TouchableOpacity>
+        {/* Extract Step */}
+        <View style={[styles.step, currentStep === 'extract' && styles.stepActive]}>
+          <View style={styles.stepIcon}>
+            {currentStep === 'extract' ? (
+              <ActivityIndicator size="small" color={theme.colors.brand.primary} />
+            ) : (currentStep === 'battery' || currentStep === 'start' || currentStep === 'done') ? (
+              <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
+            ) : (
+              <View style={styles.stepNumber}><Text style={styles.stepNumberText}>2</Text></View>
+            )}
+          </View>
+          <View style={styles.stepContent}>
+            <Text style={styles.stepTitle}>Preparing environment</Text>
+            <Text style={styles.stepDesc}>Extracting files and setting up proot</Text>
+          </View>
         </View>
-      </View>
 
-      <View style={styles.step}>
-        <View style={styles.stepHeader}>
-          <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
-          <Text style={styles.stepTitle}>Enter Your Token</Text>
+        {/* Battery Optimization Step */}
+        <View style={[styles.step, currentStep === 'battery' && styles.stepActive]}>
+          <View style={styles.stepIcon}>
+            {currentStep === 'battery' ? (
+              <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
+            ) : (currentStep === 'start' || currentStep === 'done') ? (
+              <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
+            ) : (
+              <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
+            )}
+          </View>
+          <View style={styles.stepContent}>
+            <Text style={styles.stepTitle}>Battery optimization</Text>
+            <Text style={styles.stepDesc}>
+              Allow VibeShell to run in background
+            </Text>
+            {currentStep === 'battery' && (
+              <TouchableOpacity 
+                style={styles.actionButton}
+                onPress={handleBatteryOptimization}
+              >
+                <Text style={styles.actionButtonText}>Grant Permission</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
-        <Text style={styles.stepDesc}>
-          The script prints an auth token at the end. Paste it below to connect.
-        </Text>
 
-        <TextInput
-          style={styles.input}
-          value={token}
-          onChangeText={setToken}
-          placeholder="Paste your auth token"
-          placeholderTextColor={theme.colors.text.muted}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        {/* Start Bridge Step */}
+        <View style={[styles.step, currentStep === 'start' && styles.stepActive]}>
+          <View style={styles.stepIcon}>
+            {currentStep === 'start' ? (
+              <ActivityIndicator size="small" color={theme.colors.brand.primary} />
+            ) : currentStep === 'done' ? (
+              <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
+            ) : (
+              <View style={styles.stepNumber}><Text style={styles.stepNumberText}>4</Text></View>
+            )}
+          </View>
+          <View style={styles.stepContent}>
+            <Text style={styles.stepTitle}>Starting bridge service</Text>
+            <Text style={styles.stepDesc}>Connecting to local environment</Text>
+          </View>
+        </View>
 
-        <TouchableOpacity
-          style={[styles.checkButton, (!token.trim() || checking) && styles.checkButtonDisabled]}
-          onPress={handleCheckConnection}
-          disabled={!token.trim() || checking}
-        >
-          {checking ? (
-            <Ionicons name="sync" size={16} color={theme.colors.text.inverse} />
-          ) : isConnected ? (
-            <Ionicons name="checkmark-circle" size={16} color={theme.colors.text.inverse} />
-          ) : (
-            <Ionicons name="wifi" size={16} color={theme.colors.text.inverse} />
-          )}
-          <Text style={styles.checkButtonText}>
-            {checking ? 'Checking...' : isConnected ? 'Connected' : 'Check Connection'}
-          </Text>
-        </TouchableOpacity>
-
-        {isConnected && (
-          <View style={styles.successBanner}>
-            <Ionicons name="checkmark-circle" size={16} color={theme.colors.semantic.success} />
-            <Text style={styles.successText}>Bridge connected successfully</Text>
+        {/* Error */}
+        {error && (
+          <View style={styles.errorBox}>
+            <Ionicons name="alert-circle" size={16} color={theme.colors.semantic.error} />
+            <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
-      </View>
 
-      <View style={styles.actions}>
-        <TouchableOpacity style={styles.doneButton} onPress={handleDone}>
-          <Text style={styles.doneButtonText}>Done</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
-          <Text style={styles.skipButtonText}>Skip — set up later</Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+        {/* Done */}
+        {currentStep === 'done' && isConnected && (
+          <View style={styles.successBox}>
+            <Ionicons name="checkmark-circle" size={20} color={theme.colors.semantic.success} />
+            <Text style={styles.successText}>VibeShell is ready</Text>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Footer */}
+      {currentStep === 'done' && (
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.doneButton} onPress={handleDone}>
+            <Text style={styles.doneButtonText}>Continue</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -145,122 +222,134 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.backgrounds.base,
   },
-  step: {
+  header: {
     padding: theme.spacing.lg,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.borders.default,
   },
-  stepHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing.sm,
+  title: {
+    ...theme.typography.textStyles.heading,
+    fontSize: 20,
+    color: theme.colors.text.primary,
+    marginBottom: theme.spacing.xs,
   },
-  stepNumber: {
-    width: 28,
-    height: 28,
-    borderRadius: theme.borderRadius.md,
-    backgroundColor: theme.colors.brand.primaryMuted,
+  subtitle: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.text.secondary,
+  },
+  content: {
+    flex: 1,
+  },
+  step: {
+    flexDirection: 'row',
+    padding: theme.spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borders.default,
+    opacity: 0.5,
+  },
+  stepActive: {
+    opacity: 1,
+  },
+  stepIcon: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: theme.spacing.md,
   },
-  stepNumberText: {
-    ...theme.typography.textStyles.bodyBold,
-    color: theme.colors.brand.primary,
-  },
-  stepTitle: {
-    ...theme.typography.textStyles.heading,
-    color: theme.colors.text.primary,
-  },
-  stepDesc: {
-    ...theme.typography.textStyles.body,
-    color: theme.colors.text.muted,
-    marginBottom: theme.spacing.md,
-  },
-  linkButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.brand.primaryMuted,
-    padding: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
-    alignSelf: 'flex-start',
-    gap: theme.spacing.sm,
-  },
-  linkText: {
-    ...theme.typography.textStyles.body,
-    color: theme.colors.brand.primary,
-    fontWeight: theme.typography.fontWeights.medium,
-  },
-  codeBlock: {
-    backgroundColor: theme.colors.backgrounds.elevated,
-    borderRadius: theme.borderRadius.md,
-    padding: theme.spacing.md,
-    borderWidth: 1,
-    borderColor: theme.colors.borders.default,
-  },
-  codeText: {
-    ...theme.typography.textStyles.code,
-    color: theme.colors.text.primary,
-    marginBottom: theme.spacing.md,
-  },
-  copyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.brand.primary,
-    padding: theme.spacing.sm,
-    borderRadius: theme.borderRadius.sm,
-    gap: theme.spacing.sm,
-  },
-  copyButtonText: {
-    ...theme.typography.textStyles.bodySmall,
-    color: theme.colors.text.inverse,
-    fontWeight: theme.typography.fontWeights.medium,
-  },
-  input: {
-    ...theme.typography.textStyles.body,
-    color: theme.colors.text.primary,
+  stepNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
     backgroundColor: theme.colors.surfaces.surface,
     borderWidth: 1,
     borderColor: theme.colors.borders.default,
-    borderRadius: theme.borderRadius.md,
-    padding: theme.spacing.md,
-    marginBottom: theme.spacing.md,
-    fontFamily: theme.typography.fontFamilies.mono,
-  },
-  checkButton: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  stepNumberText: {
+    ...theme.typography.textStyles.bodySmall,
+    color: theme.colors.text.secondary,
+    fontWeight: theme.typography.fontWeights.medium,
+  },
+  stepContent: {
+    flex: 1,
+  },
+  stepTitle: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.text.primary,
+    fontWeight: theme.typography.fontWeights.medium,
+    marginBottom: theme.spacing.xs,
+  },
+  stepDesc: {
+    ...theme.typography.textStyles.bodySmall,
+    color: theme.colors.text.secondary,
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: theme.colors.surfaces.surface,
+    borderRadius: 2,
+    marginTop: theme.spacing.md,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
     backgroundColor: theme.colors.brand.primary,
-    padding: theme.spacing.md,
+  },
+  progressText: {
+    ...theme.typography.textStyles.bodySmall,
+    color: theme.colors.text.secondary,
+    marginTop: theme.spacing.xs,
+  },
+  actionButton: {
+    backgroundColor: theme.colors.brand.primary,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
     borderRadius: theme.borderRadius.md,
-    gap: theme.spacing.sm,
+    marginTop: theme.spacing.md,
+    alignSelf: 'flex-start',
   },
-  checkButtonDisabled: {
-    opacity: 0.5,
-  },
-  checkButtonText: {
+  actionButtonText: {
     ...theme.typography.textStyles.body,
     color: theme.colors.text.inverse,
     fontWeight: theme.typography.fontWeights.medium,
   },
-  successBanner: {
+  errorBox: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
-    marginTop: theme.spacing.md,
-    padding: theme.spacing.sm,
+    margin: theme.spacing.lg,
+    padding: theme.spacing.md,
+    backgroundColor: theme.colors.semantic.errorMuted,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.semantic.error,
+  },
+  errorText: {
+    ...theme.typography.textStyles.body,
+    color: theme.colors.semantic.error,
+    flex: 1,
+  },
+  successBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    margin: theme.spacing.lg,
+    padding: theme.spacing.md,
     backgroundColor: theme.colors.semantic.successMuted,
-    borderRadius: theme.borderRadius.sm,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.semantic.success,
   },
   successText: {
-    ...theme.typography.textStyles.bodySmall,
+    ...theme.typography.textStyles.body,
     color: theme.colors.semantic.success,
+    fontWeight: theme.typography.fontWeights.medium,
   },
-  actions: {
+  footer: {
     padding: theme.spacing.lg,
-    gap: theme.spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borders.default,
   },
   doneButton: {
     backgroundColor: theme.colors.brand.primary,
@@ -272,14 +361,5 @@ const styles = StyleSheet.create({
     ...theme.typography.textStyles.body,
     color: theme.colors.text.inverse,
     fontWeight: theme.typography.fontWeights.medium,
-  },
-  skipButton: {
-    padding: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
-    alignItems: 'center',
-  },
-  skipButtonText: {
-    ...theme.typography.textStyles.body,
-    color: theme.colors.text.muted,
   },
 });

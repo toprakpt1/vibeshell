@@ -1,7 +1,7 @@
 /**
  * VibeSHell Bridge Server
  *
- * A lightweight WebSocket server designed to run inside Termux on Android.
+ * A lightweight WebSocket server designed to run inside proot (Debian) on Android.
  * It exposes a JSON-RPC style API so the React Native frontend can execute
  * shell commands, manage files, and perform git operations through a secure,
  * token-authenticated WebSocket connection on localhost.
