@@ -43,8 +43,8 @@ fi
 
 mkdir -p "$VIBESHELL_DIR"
 
-# Bridge komutu
-BRIDGE_CMD="$PROOT_BIN -0 -r $ROOTFS_DIR -b /dev -b /proc -b /sys -w /root /usr/local/bin/node /root/bridge/server.js"
+# Bridge komutu (Alpine + proot --kill-on-exit -S)
+BRIDGE_CMD="$PROOT_BIN --kill-on-exit -S $ROOTFS_DIR /usr/bin/node /root/bridge/server.js"
 
 if [ "${1:-}" = "--daemon" ]; then
   # Arka planda çalıştır

@@ -32,7 +32,12 @@ BRIDGE_DIR="${VIBESHELL_DIR}/bridge"
 PROOT_DIR="${VIBESHELL_DIR}/proot"
 ROOTFS_DIR="${VIBESHELL_DIR}/rootfs"
 TOKEN_PATH="${HOME}/.vibeshell-token"
-REPO_RAW="https://raw.githubusercontent.com/toprakpt1/vibeshell/master/bridge"
+
+# Termux proot paketi (aarch64, Android uyumlu)
+PROOT_DEB_URL="https://packages.termux.org/apt/termux-main/pool/main/p/proot/proot_5.1.107.82_aarch64.deb"
+
+# Alpine Linux minirootfs (aarch64, ~3.8MB)
+ALPINE_ROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz"
 
 # Renkler
 RED='\033[0;31m'
@@ -65,111 +70,106 @@ detect_arch() {
 }
 
 # ---------------------------------------------------------------------------
-# Adım 1: Proot binary'sini indir
+# Adım 1: Proot binary'sini Termux paketinden indir
 # ---------------------------------------------------------------------------
 install_proot() {
   log_info "Proot kuruluyor..."
 
   mkdir -p "$PROOT_DIR"
 
-  local arch proot_url
-  arch=$(detect_arch)
-  proot_url="https://github.com/proot-me/proot/releases/download/v5.4.0/proot-v5.4.0-${arch}-static"
-
   local proot_bin="${PROOT_DIR}/proot"
+  local loader_bin="${PROOT_DIR}/loader"
 
-  if [ -f "$proot_bin" ]; then
+  if [ -f "$proot_bin" ] && [ -f "$loader_bin" ]; then
     log_warn "Proot zaten mevcut: $proot_bin"
-  else
-    log_info "Proot indiriliyor: $proot_url"
-    curl -sL "$proot_url" -o "$proot_bin"
-    chmod +x "$proot_bin"
-    log_success "Proot indirildi: $proot_bin"
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# Adım 2: Debian rootfs
-# ---------------------------------------------------------------------------
-setup_rootfs() {
-  if [ -d "$ROOTFS_DIR" ] && [ -f "$ROOTFS_DIR/usr/bin/node" ]; then
-    log_warn "Rootfs zaten mevcut ve Node.js kurulu: $ROOTFS_DIR"
     return 0
   fi
 
-  log_info "Debian rootfs oluşturuluyor..."
+  local tmpdir
+  tmpdir=$(mktemp -d)
 
-  local arch
-  arch=$(detect_arch)
-  local deb_arch
-  case "$arch" in
-    aarch64)  deb_arch="arm64" ;;
-    arm)      deb_arch="armhf" ;;
-    x86_64)   deb_arch="amd64" ;;
-    i686)     deb_arch="i386" ;;
-  esac
+  log_info "Termux proot paketi indiriliyor..."
+  curl -sL "$PROOT_DEB_URL" -o "${tmpdir}/proot.deb"
 
-  # debootstrap ile rootfs oluştur (sudo gerekli)
-  if command -v debootstrap >/dev/null 2>&1; then
-    log_info "debootstrap ile Debian bookworm kuruluyor..."
-    sudo debootstrap --arch="$deb_arch" --variant=minbase \
-      --include=busybox,util-linux,procps \
-      bookworm "$ROOTFS_DIR" https://deb.debian.org/debian/
-  else
-    log_warn "debootstrap bulunamadı"
-    log_info "debootstrap kurulmaya çalışılıyor..."
+  log_info "Paket çıkarılıyor..."
+  cd "$tmpdir"
+  ar x proot.deb 2>/dev/null || true
 
-    # Debian tabanlı sistemlerde debootstrap'u kur
-    if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get update -qq
-      sudo apt-get install -y -qq debootstrap
-      sudo debootstrap --arch="$deb_arch" --variant=minbase \
-        --include=busybox,util-linux,procps \
-        bookworm "$ROOTFS_DIR" https://deb.debian.org/debian/
-    else
-      log_error "debootstrap kurulamadı. Manuel kurulum gerekli."
-      log_info "Alternatif: https://github.com/nicknisi/dotfiles/raw/main/debian-rootfs.tar.gz"
-      log_info "İndirip ${ROOTFS_DIR}/ dizinine çıkarın."
-      exit 1
-    fi
+  if [ -f data.tar.xz ]; then
+    tar xf data.tar.xz --wildcards '*/bin/proot' '*/libexec/proot/loader' 2>/dev/null || \
+    tar xf data.tar.xz 2>/dev/null || true
+
+    find . -name "proot" -type f -not -name "*.deb" -not -name "data.tar*" -not -name "control.tar*" | while read f; do
+      cp "$f" "$proot_bin"
+      chmod +x "$proot_bin"
+    done
+
+    find . -name "loader" -type f | while read f; do
+      cp "$f" "$loader_bin"
+      chmod +x "$loader_bin"
+    done
   fi
 
-  # Gerekli dizinleri oluştur
-  mkdir -p "$ROOTFS_DIR"/{dev,proc,sys,tmp,root/bridge}
-  chmod 1777 "$ROOTFS_DIR/tmp"
+  cd - > /dev/null
+  rm -rf "$tmpdir"
 
-  log_success "Rootfs hazır: $ROOTFS_DIR"
+  if [ -f "$proot_bin" ] && [ -f "$loader_bin" ]; then
+    log_success "Proot kuruldu: $proot_bin + $loader_bin"
+  else
+    log_error "Proot kurulamadı!"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
-# Adım 3: Node.js ve git kur
+# Adım 2: Alpine rootfs indir ve çıkar
+# ---------------------------------------------------------------------------
+setup_rootfs() {
+  if [ -d "$ROOTFS_DIR" ] && [ -f "$ROOTFS_DIR/bin/sh" ]; then
+    log_warn "Rootfs zaten mevcut ve kurulu: $ROOTFS_DIR"
+    return 0
+  fi
+
+  log_info "Alpine rootfs oluşturuluyor..."
+
+  local tmpdir
+  tmpdir=$(mktemp -d)
+
+  log_info "Alpine rootfs indiriliyor (~3.8MB)..."
+  curl -sL "$ALPINE_ROOTFS_URL" -o "${tmpdir}/alpine.tar.gz"
+
+  log_info "Rootfs çıkarılıyor..."
+  mkdir -p "$ROOTFS_DIR"
+  tar -xzf "${tmpdir}/alpine.tar.gz" -C "$ROOTFS_DIR"
+
+  mkdir -p "$ROOTFS_DIR"/{dev,proc,sys,tmp,root/bridge}
+  chmod 1777 "$ROOTFS_DIR/tmp"
+
+  rm -rf "$tmpdir"
+
+  log_success "Alpine rootfs hazır: $ROOTFS_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Adım 3: Node.js ve git kur (Alpine apk ile)
 # ---------------------------------------------------------------------------
 install_packages() {
   log_info "Proot ortamında Node.js ve git kuruluyor..."
 
   local proot_bin="${PROOT_DIR}/proot"
-  local bash_bin="/bin/bash"
-  [ ! -f "$ROOTFS_DIR/bin/bash" ] && bash_bin="/bin/sh"
 
-  $proot_bin -0 -r "$ROOTFS_DIR" \
-    -b /dev \
-    -b /proc \
-    -b /sys \
-    -w /root \
-    $bash_bin -c '
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update -qq
-      apt-get install -y -qq curl git ca-certificates gnupg 2>/dev/null
+  $proot_bin \
+    --kill-on-exit \
+    -S "$ROOTFS_DIR" \
+    /bin/sh -c '
+      export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      apk update --quiet
+      apk add --quiet curl git nodejs npm
 
-      # Node.js 22.x kur
-      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-      apt-get install -y -qq nodejs 2>/dev/null
-
-      # Versiyonları kontrol et
       echo "--- Kurulum Sonuçları ---"
-      node --version
-      npm --version
-      git --version
+      node --version 2>/dev/null || echo "node: YOK"
+      npm --version 2>/dev/null || echo "npm: YOK"
+      git --version 2>/dev/null || echo "git: YOK"
   '
 
   log_success "Node.js ve git kuruldu."
@@ -199,11 +199,10 @@ setup_bridge() {
   local proot_bin="${PROOT_DIR}/proot"
   if [ -f "$proot_bin" ] && [ -f "$bridge_dest/package.json" ]; then
     log_info "npm bağımlılıkları kuruluyor..."
-    $proot_bin -0 -r "$ROOTFS_DIR" \
-      -b /dev \
-      -b /proc \
-      -w /root/bridge \
-      /usr/bin/npm install --production
+    $proot_bin \
+      --kill-on-exit \
+      -S "$ROOTFS_DIR" \
+      /bin/sh -c "cd /root/bridge && npm install --production"
   fi
 
   log_success "Bridge kodu hazır: $bridge_dest"

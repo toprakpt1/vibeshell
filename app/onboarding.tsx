@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, NativeModules } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSettings } from '../src/store/useSettings';
 import { useBridgeStore } from '../src/bridge';
-import { ProotManager } from '../src/native/ProotModule';
 import { theme } from '../src/theme';
+
+const { ProotModule } = NativeModules;
 
 type SetupStep = 'download' | 'extract' | 'battery' | 'start' | 'done';
 
@@ -13,73 +14,120 @@ export default function OnboardingScreen() {
   const router = useRouter();
   const { setOnboardingSeen } = useSettings();
   const { connect, connectionState } = useBridgeStore();
-  
+
   const [currentStep, setCurrentStep] = useState<SetupStep>('download');
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [statusMessage, setStatusMessage] = useState('Preparing...');
   const [error, setError] = useState<string | null>(null);
 
-  const prootManager = ProotManager.getInstance();
-
-  // Start setup when component mounts
   useEffect(() => {
     startSetup();
   }, []);
 
   const startSetup = async () => {
     try {
-      // Step 1: Download rootfs
+      // Step 1: Check if already installed
       setCurrentStep('download');
-      await downloadRootfs();
+      setStatusMessage('Checking environment...');
 
-      // Step 2: Extract rootfs
-      setCurrentStep('extract');
-      await extractRootfs();
+      const isInstalled = await ProotModule?.isProotInstalled();
+      if (isInstalled) {
+        setStatusMessage('Already installed, starting...');
+        setDownloadProgress(100);
+        setCurrentStep('start');
+        await startBridge();
+        return;
+      }
 
-      // Step 3: Request battery optimization
+      // Step 2: Download + extract (foreground service handles both)
+      setStatusMessage('Downloading Linux environment...');
+      setDownloadProgress(10);
+
+      await ProotModule?.startBridgeService();
+
+      // Poll progress until bridge is ready
+      await pollInstallProgress();
+
+      // Step 3: Battery optimization
       setCurrentStep('battery');
-      
+      setStatusMessage('Requesting battery permission...');
+      setDownloadProgress(80);
+
+      try {
+        await ProotModule?.requestBatteryOptimizationExemption();
+      } catch {
+        // Continue even if user denies
+      }
+
+      // Step 4: Start bridge
+      setCurrentStep('start');
+      setStatusMessage('Starting bridge...');
+      setDownloadProgress(90);
+
+      await startBridge();
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Setup failed');
     }
   };
 
-  const downloadRootfs = async () => {
-    // Simulate download (gerçek implementasyonda GitHub API kullan)
-    return new Promise((resolve) => {
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += 10;
-        setDownloadProgress(progress);
-        if (progress >= 100) {
-          clearInterval(interval);
-          resolve(true);
-        }
-      }, 300);
-    });
-  };
+  const pollInstallProgress = async () => {
+    const maxAttempts = 120; // 2 minutes max
+    let attempts = 0;
 
-  const extractRootfs = async () => {
-    // Simulate extraction
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  };
+    while (attempts < maxAttempts) {
+      const status = await ProotModule?.getBridgeStatus();
+      const installed = status?.prootInstalled ?? false;
+      const running = status?.serviceRunning ?? false;
 
-  const handleBatteryOptimization = async () => {
-    try {
-      await prootManager.ensureBatteryOptimization();
-      setCurrentStep('start');
-      await startBridge();
-    } catch (err) {
-      console.error('Battery opt error:', err);
-      setCurrentStep('start');
-      await startBridge();
+      if (installed && running) {
+        setDownloadProgress(70);
+        setStatusMessage('Environment ready');
+        return;
+      }
+
+      if (installed) {
+        setDownloadProgress(60);
+        setStatusMessage('Starting services...');
+        return;
+      }
+
+      // Increment progress visually
+      const progress = Math.min(50, 10 + attempts * 2);
+      setDownloadProgress(progress);
+
+      if (progress < 25) {
+        setStatusMessage('Downloading proot binary...');
+      } else if (progress < 40) {
+        setStatusMessage('Downloading Debian rootfs...');
+      } else {
+        setStatusMessage('Installing Node.js...');
+      }
+
+      await new Promise(r => setTimeout(r, 1000));
+      attempts++;
     }
+
+    throw new Error('Installation timed out');
   };
 
   const startBridge = async () => {
     try {
-      await prootManager.startBridge();
+      await ProotModule?.startBridgeService();
+
+      // Wait for bridge to be reachable
+      let attempts = 0;
+      while (attempts < 30) {
+        const running = await ProotModule?.isBridgeRunning();
+        if (running) break;
+        await new Promise(r => setTimeout(r, 1000));
+        attempts++;
+      }
+
       connect('ws://127.0.0.1:8765', '');
+      setDownloadProgress(100);
       setCurrentStep('done');
+      setStatusMessage('Ready!');
     } catch (err) {
       setError('Failed to start bridge service');
     }
@@ -97,7 +145,7 @@ export default function OnboardingScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Setting up VibeShell</Text>
         <Text style={styles.subtitle}>
-          Installing Linux environment · This will take a few minutes
+          {statusMessage}
         </Text>
       </View>
 
@@ -117,12 +165,12 @@ export default function OnboardingScreen() {
             <Text style={styles.stepTitle}>Downloading Linux environment</Text>
             <Text style={styles.stepDesc}>Alpine Linux + Node.js runtime</Text>
             {currentStep === 'download' && (
-              <View style={styles.progressBar}>
-                <View style={[styles.progressFill, { width: `${downloadProgress}%` }]} />
-              </View>
-            )}
-            {currentStep === 'download' && (
-              <Text style={styles.progressText}>{downloadProgress}% · ~25 MB</Text>
+              <>
+                <View style={styles.progressBar}>
+                  <View style={[styles.progressFill, { width: `${downloadProgress}%` }]} />
+                </View>
+                <Text style={styles.progressText}>{downloadProgress}%</Text>
+              </>
             )}
           </View>
         </View>
@@ -160,14 +208,6 @@ export default function OnboardingScreen() {
             <Text style={styles.stepDesc}>
               Allow VibeShell to run in background
             </Text>
-            {currentStep === 'battery' && (
-              <TouchableOpacity 
-                style={styles.actionButton}
-                onPress={handleBatteryOptimization}
-              >
-                <Text style={styles.actionButtonText}>Grant Permission</Text>
-              </TouchableOpacity>
-            )}
           </View>
         </View>
 
@@ -300,19 +340,6 @@ const styles = StyleSheet.create({
     ...theme.typography.textStyles.bodySmall,
     color: theme.colors.text.secondary,
     marginTop: theme.spacing.xs,
-  },
-  actionButton: {
-    backgroundColor: theme.colors.brand.primary,
-    paddingVertical: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.md,
-    borderRadius: theme.borderRadius.md,
-    marginTop: theme.spacing.md,
-    alignSelf: 'flex-start',
-  },
-  actionButtonText: {
-    ...theme.typography.textStyles.body,
-    color: theme.colors.text.inverse,
-    fontWeight: theme.typography.fontWeights.medium,
   },
   errorBox: {
     flexDirection: 'row',

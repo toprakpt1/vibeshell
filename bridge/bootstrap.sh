@@ -28,7 +28,11 @@ PROOT_DIR="${VIBESHELL_DIR}/proot"
 ROOTFS_DIR="${VIBESHELL_DIR}/rootfs"
 TOKEN_PATH="${HOME}/.vibeshell-token"
 NODE_VERSION="22"
-REPO_RAW="https://raw.githubusercontent.com/toprakpt1/vibeshell/master/bridge"
+# Termux proot paketi (aarch64, Android uyumlu)
+PROOT_DEB_URL="https://packages.termux.org/apt/termux-main/pool/main/p/proot/proot_5.1.107.82_aarch64.deb"
+
+# Alpine Linux minirootfs (aarch64, ~3.8MB)
+ALPINE_ROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz"
 
 # Renkler
 RED='\033[0;31m'
@@ -76,265 +80,130 @@ detect_os() {
 }
 
 # ---------------------------------------------------------------------------
-# Adım 1: Proot binary'sini indir
+# Adım 1: Proot binary'sini Termux paketinden indir
 # ---------------------------------------------------------------------------
 install_proot() {
   log_info "Proot kuruluyor..."
 
   mkdir -p "$PROOT_DIR"
 
-  local arch os proot_url
-  arch=$(detect_arch)
-  os=$(detect_os)
-
-  # Proot release URL'i
-  if [ "$os" = "linux" ]; then
-    proot_url="https://github.com/proot-me/proot/releases/download/v5.4.0/proot-v5.4.0-${arch}-static"
-  elif [ "$os" = "darwin" ]; then
-    log_warn "macOS'ta proot-tester5 kullanılıyor (gerçek proot değil)"
-    proot_url="https://github.com/proot-me/proot/releases/download/v5.4.0/proot-v5.4.0-${arch}-static"
-  fi
-
   local proot_bin="${PROOT_DIR}/proot"
+  local loader_bin="${PROOT_DIR}/loader"
 
-  if [ -f "$proot_bin" ]; then
+  if [ -f "$proot_bin" ] && [ -f "$loader_bin" ]; then
     log_warn "Proot zaten mevcut: $proot_bin"
-  else
-    log_info "Proot indiriliyor: $proot_url"
-    curl -sL "$proot_url" -o "$proot_bin"
-    chmod +x "$proot_bin"
-    log_success "Proot indirildi: $proot_bin"
+    return 0
   fi
 
-  # test-static da indir (.linkLabel test için opsiyonel)
-  local test_url="https://github.com/proot-me/proot/releases/download/v5.4.0/test-static-${arch}"
-  local test_bin="${PROOT_DIR}/test-static"
-  if [ ! -f "$test_bin" ]; then
-    curl -sL "$test_url" -o "$test_bin" 2>/dev/null || true
-    chmod +x "$test_bin" 2>/dev/null || true
+  local tmpdir
+  tmpdir=$(mktemp -d)
+
+  log_info "Termux proot paketi indiriliyor..."
+  curl -sL "$PROOT_DEB_URL" -o "${tmpdir}/proot.deb"
+
+  # Deb'den data.tar.xz'i çıkar
+  log_info "Paket çıkarılıyor..."
+  cd "$tmpdir"
+  ar x proot.deb 2>/dev/null || {
+    # ar yoksa dd ile header atla
+    dd if=proot.deb bs=64 skip=1 of=data.tar.xz 2>/dev/null
+  }
+
+  if [ -f data.tar.xz ]; then
+    # data.tar.xz'den proot ve loader'ı çıkar
+    tar xf data.tar.xz --wildcards '*/bin/proot' '*/libexec/proot/loader' 2>/dev/null || \
+    tar xf data.tar.xz 2>/dev/null || true
+
+    # Proot binary'yi bul ve kopyala
+    find . -name "proot" -type f -not -name "*.deb" -not -name "data.tar*" -not -name "control.tar*" | while read f; do
+      cp "$f" "$proot_bin"
+      chmod +x "$proot_bin"
+    done
+
+    # Loader binary'yi bul ve kopyala
+    find . -name "loader" -type f | while read f; do
+      cp "$f" "$loader_bin"
+      chmod +x "$loader_bin"
+    done
+  fi
+
+  cd - > /dev/null
+  rm -rf "$tmpdir"
+
+  if [ -f "$proot_bin" ] && [ -f "$loader_bin" ]; then
+    log_success "Proot kuruldu: $proot_bin + $loader_bin"
+  else
+    log_error "Proot kurulamadı!"
+    return 1
   fi
 }
 
 # ---------------------------------------------------------------------------
-# Adım 2: Debian minimal rootfs oluştur
+# Adım 2: Alpine rootfs indir ve çıkar
 # ---------------------------------------------------------------------------
 setup_rootfs() {
-  log_info "Debian rootfs oluşturuluyor..."
+  log_info "Alpine rootfs oluşturuluyor..."
 
-  if [ -d "$ROOTFS_DIR" ] && [ -f "$ROOTFS_DIR/usr/bin/bash" ]; then
+  if [ -d "$ROOTFS_DIR" ] && [ -f "$ROOTFS_DIR/bin/sh" ]; then
     log_warn "Rootfs zaten mevcut: $ROOTFS_DIR"
     return 0
   fi
 
-  local arch
-  arch=$(detect_arch)
+  local tmpdir
+  tmpdir=$(mktemp -d)
 
-  # Debian mimari eşleme
-  local deb_arch
-  case "$arch" in
-    aarch64)  deb_arch="arm64" ;;
-    arm)      deb_arch="armhf" ;;
-    x86_64)   deb_arch="amd64" ;;
-    i686)     deb_arch="i386" ;;
-  esac
+  log_info "Alpine rootfs indiriliyor (~3.8MB)..."
+  curl -sL "$ALPINE_ROOTFS_URL" -o "${tmpdir}/alpine.tar.gz"
 
-  # debootstrap varsa kullan, yoksa hazır rootfs indir
-  if command -v debootstrap >/dev/null 2>&1; then
-    log_info "debootstrap ile rootfs oluşturuluyor (sudo gerekli)..."
-    sudo debootstrap --arch="$deb_arch" --variant=minbase \
-      --include=busybox,util-linux,procps \
-      bookworm "$ROOTFS_DIR" https://deb.debian.org/debian/
-  else
-    log_info "debootstrap bulunamadı, hazır rootfs indiriliyor..."
-    # Debian cloud image rootfs (minimal, ~50MB)
-    local rootfs_url="https://github.com/nicknisi/dotfiles/raw/main/debian-rootfs.tar.gz"
-    # Alternatif: proot Debian rootfs
-    rootfs_url="https://github.com/nicknisi/dotfiles/raw/main/debian-rootfs.tar.gz"
+  log_info "Rootfs çıkarılıyor..."
+  mkdir -p "$ROOTFS_DIR"
+  tar -xzf "${tmpdir}/alpine.tar.gz" -C "$ROOTFS_DIR"
 
-    # tinyfs'den minimal Debian rootfs
-    # notroot/tinyroot proje rootfs'leri
-    rootfs_url="https://github.com/nicknisi/dotfiles/raw/main/debian-rootfs.tar.gz"
-
-    # Basit approach: proot ile debootstrap
-    log_warn "debootstrap yükleniyor..."
-    local tmpdir
-    tmpdir=$(mktemp -d)
-
-    # proot ile minimal rootfs oluşturma
-    if [ -f "${PROOT_DIR}/proot" ]; then
-      log_info "Proot ile debian-bootstrap çalıştırılıyor..."
-
-      # İlk olarak minimal filesystem oluştur
-      mkdir -p "$ROOTFS_DIR"/{bin,dev,etc,home,lib,lib64,proc,root,sbin,sys,tmp,usr,var}
-      mkdir -p "$ROOTFS_DIR"/usr/{bin,lib,local,sbin,share,var}
-      mkdir -p "$ROOTFS_DIR"/var/lib
-      mkdir -p "$ROOTFS_DIR"/etc/{apt,ssl,alternatives}
-
-      # Debian rootfs'i tinyfs'den indir
-      log_info "Debian bookworm rootfs indiriliyor..."
-      local rootfs_archive="${tmpdir}/debian-rootfs.tar.gz"
-
-      #tinyroot projesinden minimal rootfs
-      curl -sL "https://github.com/nicknisi/dotfiles/raw/main/debian-rootfs.tar.gz" \
-        -o "$rootfs_archive" 2>/dev/null || true
-
-      if [ -f "$rootfs_archive" ] && [ -s "$rootfs_archive" ]; then
-        log_info "Rootfs arşivi indirildi, çıkarılıyor..."
-        tar -xzf "$rootfs_archive" -C "$ROOTFS_DIR" 2>/dev/null || true
-      else
-        log_warn "Hazır rootfs indirilemedi, manuel oluşturuluyor..."
-        create_minimal_rootfs
-      fi
-    else
-      create_minimal_rootfs
-    fi
-
-    rm -rf "$tmpdir"
-  fi
-
-  # gerekli dizinleri oluştur
+  # Gerekli dizinleri oluştur
   mkdir -p "$ROOTFS_DIR"/{dev,proc,sys,tmp,root/bridge}
   chmod 1777 "$ROOTFS_DIR/tmp"
 
-  log_success "Rootfs hazır: $ROOTFS_DIR"
-}
+  rm -rf "$tmpdir"
 
-# Manuel minimal rootfs oluşturma (fallback)
-create_minimal_rootfs() {
-  log_info "Manuel minimal rootfs oluşturuluyor..."
-
-  mkdir -p "$ROOTFS_DIR"/{bin,dev,etc,home,lib,lib64,proc,root,sbin,sys,tmp,usr,var}
-  mkdir -p "$ROOTFS_DIR"/usr/{bin,lib,local,sbin,share,var}
-  mkdir -p "$ROOTFS_DIR"/var/lib
-  mkdir -p "$ROOTFS_DIR"/etc/{apt,ssl,alternatives,ld.so.conf.d}
-
-  # Busybox veya static busybox indir
-  local busybox_url="https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"
-  local arch
-  arch=$(detect_arch)
-  case "$arch" in
-    aarch64) busybox_url="https://busybox.net/downloads/binaries/1.35.0-aarch64-linux-musl/busybox" ;;
-    arm)     busybox_url="https://busybox.net/downloads/binaries/1.35.0-armv6l-linux-musl/busybox" ;;
-    x86_64)  busybox_url="https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox" ;;
-  esac
-
-  curl -sL "$busybox_url" -o "$ROOTFS_DIR/bin/busybox" 2>/dev/null || true
-  chmod +x "$ROOTFS_DIR/bin/busybox" 2>/dev/null || true
-
-  # Busybox linkleri oluştur
-  if [ -f "$ROOTFS_DIR/bin/busybox" ]; then
-    cd "$ROOTFS_DIR/bin"
-    for cmd in sh bash ls cat cp mv rm mkdir chmod chown mount umount ln grep sed awk \
-               tar gzip wget curl apt dpkg apt-get; do
-      ln -sf busybox "$cmd" 2>/dev/null || true
-    done
-    cd -
-  fi
-
-  # Basit /etc/passwd ve /etc/group
-  echo "root:x:0:0:root:/root:/bin/sh" > "$ROOTFS_DIR/etc/passwd"
-  echo "root:x:0:" > "$ROOTFS_DIR/etc/group"
-  echo "vibeshell" > "$ROOTFS_DIR/etc/hostname"
-  echo "nameserver 8.8.8.8" > "$ROOTFS_DIR/etc/resolv.conf"
-
-  log_warn "Minimal rootfs oluşturuldu (sadece busybox)"
+  log_success "Alpine rootfs hazır: $ROOTFS_DIR"
 }
 
 # ---------------------------------------------------------------------------
-# Adım 3: Node.js ve git kur (proot içinde)
+# Adım 3: Node.js ve git kur (proot içinde — Alpine apk ile)
 # ---------------------------------------------------------------------------
 install_node_in_proot() {
   log_info "Proot ortamında Node.js kuruluyor..."
 
   local proot_bin="${PROOT_DIR}/proot"
+  local loader_bin="${PROOT_DIR}/loader"
 
   if [ ! -f "$proot_bin" ]; then
     log_error "Proot binary bulunamadı: $proot_bin"
     return 1
   fi
 
-  # Node.js kurulumunu proot içinde çalıştır
-  # Debian rootfs içinde bash varsa onu kullan
-  local bash_bin="/bin/sh"
-  if [ -f "$ROOTFS_DIR/bin/bash" ]; then
-    bash_bin="/bin/bash"
-  fi
+  # Proot ile Alpine'de paket kur
+  $proot_bin \
+    --kill-on-exit \
+    -S "$ROOTFS_DIR" \
+    /bin/sh -c '
+      export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-  $proot_bin -0 -r "$ROOTFS_DIR" \
-    -b /dev \
-    -b /proc \
-    -b /sys \
-    -w /root \
-    $bash_bin -c '
-      # apt kaynaklarını güncelle (eğer apt varsa)
-      if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq
-        apt-get install -y -qq curl git ca-certificates 2>/dev/null || true
-
-        # Node.js kur
-        curl -fsSL https://deb.nodesource.com/setup_'"$NODE_VERSION"'.x | bash -
-        apt-get install -y -qq nodejs 2>/dev/null || true
-      elif command -v wget >/dev/null 2>&1; then
-        # wget ile Node.js binary indir
-        ARCH=$(uname -m)
-        case "$ARCH" in
-          aarch64) NODE_ARCH="arm64" ;;
-          armv7*)  NODE_ARCH="armv7l" ;;
-          x86_64)  NODE_ARCH="x64" ;;
-        esac
-        NODE_VER="22.16.0"
-        wget -q "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-linux-${NODE_ARCH}.tar.xz" -O /tmp/node.tar.xz
-        tar -xf /tmp/node.tar.xz -C /usr/local --strip-components=1
-        rm -f /tmp/node.tar.xz
-      fi
+      # apk güncelle ve curl + git + nodejs kur
+      apk update --quiet
+      apk add --quiet curl git nodejs npm
 
       # Versiyonları kontrol et
-      echo "Node: $(node --version 2>/dev/null || echo "YOK")"
-      echo "npm: $(npm --version 2>/dev/null || echo "YOK")"
-      echo "git: $(git --version 2>/dev/null || echo "YOK")"
+      echo "--- Kurulum Sonuçları ---"
+      node --version 2>/dev/null || echo "node: YOK"
+      npm --version 2>/dev/null || echo "npm: YOK"
+      git --version 2>/dev/null || echo "git: YOK"
   ' || {
-    log_warn "Proot içinde kurulum başarısız oldu, alternatif deneniyor..."
-    # Alternatif: Node.js static binary olarak kur
-    install_node_static
+    log_warn "Proot içinde kurulum başarısız oldu"
+    return 1
   }
 
-  log_success "Node.js kurulumu tamamlandı."
-}
-
-# Node.js'i static binary olarak kur (fallback)
-install_node_static() {
-  log_info "Node.js static binary olarak kuruluyor..."
-
-  local arch
-  arch=$(detect_arch)
-  local node_arch
-  case "$arch" in
-    aarch64) node_arch="linux-arm64" ;;
-    arm)     node_arch="linux-armv7l" ;;
-    x86_64)  node_arch="linux-x64" ;;
-  esac
-
-  local node_ver="22.16.0"
-  local node_url="https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-${node_arch}.tar.xz"
-  local tmpdir
-  tmpdir=$(mktemp -d)
-
-  log_info "Node.js v${node_ver} indiriliyor..."
-  curl -sL "$node_url" -o "${tmpdir}/node.tar.xz"
-
-  # Rootfs'e çıkar
-  mkdir -p "$ROOTFS_DIR/usr/local"
-  tar -xJf "${tmpdir}/node.tar.xz" -C "$ROOTFS_DIR/usr/local" --strip-components=1
-
-  # Symlink'ler oluştur
-  mkdir -p "$ROOTFS_DIR/usr/bin"
-  ln -sf /usr/local/bin/node "$ROOTFS_DIR/usr/bin/node" 2>/dev/null || true
-  ln -sf /usr/local/bin/npm "$ROOTFS_DIR/usr/bin/npm" 2>/dev/null || true
-  ln -sf /usr/local/bin/npx "$ROOTFS_DIR/usr/bin/npx" 2>/dev/null || true
-
-  rm -rf "$tmpdir"
-
-  log_success "Node.js static binary kuruldu."
+  log_success "Node.js ve git kuruldu."
 }
 
 # ---------------------------------------------------------------------------
@@ -353,18 +222,18 @@ setup_bridge() {
   else
     # GitHub'dan indir
     log_info "Bridge dosyaları GitHub'dan indiriliyor..."
-    curl -sL "$REPO_RAW/server.js" -o "$bridge_dest/server.js"
-    curl -sL "$REPO_RAW/package.json" -o "$bridge_dest/package.json"
+    local repo_raw="https://raw.githubusercontent.com/toprakpt1/vibeshell/master/bridge"
+    curl -sL "$repo_raw/server.js" -o "$bridge_dest/server.js"
+    curl -sL "$repo_raw/package.json" -o "$bridge_dest/package.json"
   fi
 
-  # npm bağımlılıklarını kur (rootfs içinde)
+  # npm bağımlılıklarını kur (proot içinde)
   local proot_bin="${PROOT_DIR}/proot"
   if [ -f "$proot_bin" ] && [ -f "$bridge_dest/package.json" ]; then
-    $proot_bin -0 -r "$ROOTFS_DIR" \
-      -b /dev \
-      -b /proc \
-      -w /root/bridge \
-      /usr/local/bin/npm install --production 2>/dev/null || {
+    $proot_bin \
+      --kill-on-exit \
+      -S "$ROOTFS_DIR" \
+      /bin/sh -c "cd /root/bridge && npm install --production" 2>/dev/null || {
         log_warn "npm install başarısız, manuel bağımlılıklar kontrol edilecek"
       }
   fi
@@ -406,11 +275,12 @@ setup_scripts() {
   # start.sh
   cat > "${VIBESHELL_DIR}/start.sh" << 'STARTEOF'
 #!/bin/sh
-# VibeSHell Bridge — Start Script (Proot)
+# VibeSHell Bridge — Start Script (Proot + Alpine)
 set -euo pipefail
 
 VIBESHELL_DIR="${HOME}/.vibeshell"
 PROOT_BIN="${VIBESHELL_DIR}/proot/proot"
+LOADER_BIN="${VIBESHELL_DIR}/proot/loader"
 ROOTFS_DIR="${VIBESHELL_DIR}/rootfs"
 PID_FILE="${VIBESHELL_DIR}/bridge.pid"
 
@@ -428,13 +298,9 @@ echo "[INFO] Bridge başlatılıyor..."
 
 # Proot ile bridge'i başlat
 nohup "$PROOT_BIN" \
-  -0 \
-  -r "$ROOTFS_DIR" \
-  -b /dev \
-  -b /proc \
-  -b /sys \
-  -w /root \
-  /usr/local/bin/node /root/bridge/server.js \
+  --kill-on-exit \
+  -S "$ROOTFS_DIR" \
+  /usr/bin/node /root/bridge/server.js \
   > "${VIBESHELL_DIR}/bridge.log" 2>&1 &
 
 echo $! > "$PID_FILE"
