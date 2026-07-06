@@ -1,6 +1,7 @@
 package com.vibeshell.app.bridge
 
 import android.content.Intent
+import android.util.Log
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
@@ -19,6 +20,7 @@ class ProotModule(reactContext: ReactApplicationContext) :
             ctx.startForegroundService(intent)
             promise.resolve(true)
         } catch (e: Exception) {
+            Log.e("ProotModule", "startBridgeService failed", e)
             promise.reject("SERVICE_ERROR", e.message, e)
         }
     }
@@ -33,6 +35,7 @@ class ProotModule(reactContext: ReactApplicationContext) :
             ctx.startService(intent)
             promise.resolve(true)
         } catch (e: Exception) {
+            Log.e("ProotModule", "stopBridgeService failed", e)
             promise.reject("SERVICE_ERROR", e.message, e)
         }
     }
@@ -45,15 +48,24 @@ class ProotModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getBridgeStatus(promise: Promise) {
         try {
+            val prootOk = AssetExtractor.isProotBundleExtracted(reactApplicationContext)
+            val rootfsOk = RootfsManager.isRootfsExtracted(reactApplicationContext)
+            val svcRunning = BridgeForegroundService.isRunning
+            val bridgeOk = BridgeForegroundService.isBridgeRunning
+            val ocOk = BridgeForegroundService.isOpenCodeRunning
+
+            Log.i("ProotModule", "STATUS: proot=$prootOk rootfs=$rootfsOk service=$svcRunning bridge=$bridgeOk opencode=$ocOk")
+
             val status = Arguments.createMap().apply {
-                putBoolean("prootInstalled", AssetExtractor.isProotBundleExtracted(reactApplicationContext))
-                putBoolean("rootfsExtracted", RootfsManager.isRootfsExtracted(reactApplicationContext))
-                putBoolean("serviceRunning", BridgeForegroundService.isRunning)
-                putBoolean("bridgeRunning", BridgeForegroundService.isBridgeRunning)
-                putBoolean("opencodeRunning", BridgeForegroundService.isOpenCodeRunning)
+                putBoolean("prootInstalled", prootOk)
+                putBoolean("rootfsExtracted", rootfsOk)
+                putBoolean("serviceRunning", svcRunning)
+                putBoolean("bridgeRunning", bridgeOk)
+                putBoolean("opencodeRunning", ocOk)
             }
             promise.resolve(status)
         } catch (e: Exception) {
+            Log.e("ProotModule", "getBridgeStatus failed", e)
             promise.reject("STATUS_ERROR", e.message, e)
         }
     }
@@ -75,6 +87,7 @@ class ProotModule(reactContext: ReactApplicationContext) :
             reactApplicationContext.startActivity(intent)
             promise.resolve(true)
         } catch (e: Exception) {
+            Log.e("ProotModule", "requestBatteryOptimizationExemption failed", e)
             promise.resolve(false)
         }
     }

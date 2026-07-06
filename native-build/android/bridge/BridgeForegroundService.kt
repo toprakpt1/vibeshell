@@ -49,6 +49,11 @@ class BridgeForegroundService : Service() {
     private var healthCheckThread: Thread? = null
     @Volatile private var shouldStop = false
 
+    private fun log(msg: String) {
+        val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+        Log.i(TAG, "[$ts] $msg")
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -65,6 +70,8 @@ class BridgeForegroundService : Service() {
     private fun startAll() {
         shouldStop = false
         isRunning = true
+        isBridgeRunning = false
+        isOpenCodeRunning = false
 
         val notification = buildNotification("Baslatiliyor...")
         startForeground(NOTIFICATION_ID, notification,
@@ -73,35 +80,87 @@ class BridgeForegroundService : Service() {
         acquireWakeLock()
 
         Thread {
+            val totalStart = System.currentTimeMillis()
             try {
-                // Step 1: Extract proot bundle + rootfs
-                updateNotification("Dosyalar cikariliyor...")
+                // === STEP 1: Extract proot bundle ===
+                val t1 = System.currentTimeMillis()
+                log("STEP 1: Extracting proot bundle...")
+                updateNotification("Proot cikariliyor...")
+
                 val prootBundleDir = AssetExtractor.extractProotBundle(applicationContext)
+                log("STEP 1: prootBundleDir = ${prootBundleDir.absolutePath}")
+                log("STEP 1: prootBundleDir exists = ${prootBundleDir.exists()}")
+                log("STEP 1: prootBundleDir files = ${prootBundleDir.listFiles()?.map { it.name }}")
+
                 val prootBin = AssetExtractor.getProotPath(applicationContext)
+                log("STEP 1: prootBin = ${prootBin.absolutePath}, exists=${prootBin.exists()}, size=${prootBin.length()}, executable=${prootBin.canExecute()}")
+
                 val prootLibDir = AssetExtractor.getProotLibPath(applicationContext)
+                log("STEP 1: prootLibDir = ${prootLibDir.absolutePath}, exists=${prootLibDir.exists()}")
+                prootLibDir.listFiles()?.forEach { f ->
+                    log("STEP 1:   lib: ${f.name} (${f.length()} bytes)")
+                }
 
-                // Step 2: Extract rootfs
+                if (!prootBin.exists()) throw IllegalStateException("proot binary not found at ${prootBin.absolutePath}")
+                if (!prootBin.canExecute()) {
+                    log("STEP 1: Setting proot binary executable...")
+                    prootBin.setExecutable(true, false)
+                }
+                log("STEP 1 done in ${System.currentTimeMillis() - t1}ms")
+
+                // === STEP 2: Extract rootfs ===
+                val t2 = System.currentTimeMillis()
+                log("STEP 2: Extracting rootfs...")
                 updateNotification("Rootfs cikariliyor...")
+
                 val rootfsDir = RootfsManager.getRootfsDir(applicationContext)
-                    ?: throw IllegalStateException("Rootfs cikarilamadi")
+                if (rootfsDir == null) throw IllegalStateException("Rootfs cikarilamadi - RootfsManager returned null")
+                log("STEP 2: rootfsDir = ${rootfsDir.absolutePath}")
+                log("STEP 2: rootfsDir exists = ${rootfsDir.exists()}")
+                log("STEP 2: rootfsDir contents = ${rootfsDir.listFiles()?.map { it.name }}")
 
-                // Step 3: Start bridge server
-                updateNotification("Bridge sunucusu baslatiliyor...")
+                // Verify key paths exist inside rootfs
+                val nodeBin = File(rootfsDir, "usr/local/bin/node")
+                val opencodeBin = File(rootfsDir, "usr/local/bin/opencode")
+                val bridgeDir = File(rootfsDir, "root/bridge")
+                log("STEP 2: node binary = ${nodeBin.absolutePath}, exists=${nodeBin.exists()}, size=${nodeBin.length()}")
+                log("STEP 2: opencode binary = ${opencodeBin.absolutePath}, exists=${opencodeBin.exists()}")
+                log("STEP 2: bridge dir = ${bridgeDir.absolutePath}, exists=${bridgeDir.exists()}")
+                log("STEP 2: bridge/node_modules exists = ${File(bridgeDir, "node_modules").exists()}")
+                log("STEP 2 done in ${System.currentTimeMillis() - t2}ms")
+
+                // === STEP 3: Start bridge server ===
+                val t3 = System.currentTimeMillis()
+                log("STEP 3: Starting bridge server...")
+                updateNotification("Bridge baslatiliyor...")
+
                 startBridgeServer(prootBin, rootfsDir, prootLibDir)
+
+                log("STEP 3: Waiting for bridge on port 8765...")
                 waitForBridge(60)
+                log("STEP 3 done in ${System.currentTimeMillis() - t3}ms - Bridge is UP")
 
-                // Step 4: Start OpenCode server
-                updateNotification("OpenCode sunucusu baslatiliyor...")
+                // === STEP 4: Start OpenCode server ===
+                val t4 = System.currentTimeMillis()
+                log("STEP 4: Starting OpenCode server...")
+                updateNotification("OpenCode baslatiliyor...")
+
                 startOpenCodeServer(prootBin, rootfsDir, prootLibDir)
-                waitForOpenCode(60)
 
+                log("STEP 4: Waiting for OpenCode on port 4096...")
+                waitForOpenCode(60)
+                log("STEP 4 done in ${System.currentTimeMillis() - t4}ms - OpenCode is UP")
+
+                // === ALL DONE ===
+                val totalMs = System.currentTimeMillis() - totalStart
+                log("ALL STEPS DONE in ${totalMs}ms")
                 updateNotification("VibeShell calisiyor")
 
-                // Step 6: Start health check
                 startHealthCheck()
 
             } catch (e: Exception) {
-                Log.e(TAG, "Startup failed", e)
+                val totalMs = System.currentTimeMillis() - totalStart
+                Log.e(TAG, "Startup FAILED after ${totalMs}ms", e)
                 updateNotification("Hata: ${e.message}")
                 sendEventToJS("SERVICE_ERROR", e.message ?: "Unknown error")
             }
@@ -134,6 +193,8 @@ class BridgeForegroundService : Service() {
             "cd /root/bridge && exec node server.js"
         )
 
+        log("BRIDGE CMD: ${cmd.joinToString(" ")}")
+
         val env = mapOf(
             "HOME" to "/root",
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -141,17 +202,21 @@ class BridgeForegroundService : Service() {
             "LD_LIBRARY_PATH" to prootLibDir.absolutePath
         )
 
+        log("BRIDGE ENV: LD_LIBRARY_PATH=${prootLibDir.absolutePath}")
+
         bridgeProcess = launchProcess(cmd, env)
+        log("BRIDGE process started, pid=${bridgeProcess?.toString()}")
 
         // Stream stdout
         Thread {
             BufferedReader(InputStreamReader(bridgeProcess!!.inputStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    Log.d(TAG, "[bridge] $line")
+                    Log.d(TAG, "[bridge stdout] $line")
                     sendEventToJS("BRIDGE_STDOUT", line!!)
                 }
             }
+            log("BRIDGE stdout stream ended")
         }.start()
 
         // Stream stderr
@@ -159,17 +224,18 @@ class BridgeForegroundService : Service() {
             BufferedReader(InputStreamReader(bridgeProcess!!.errorStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    Log.w(TAG, "[bridge err] $line")
+                    Log.w(TAG, "[bridge stderr] $line")
                     sendEventToJS("BRIDGE_STDERR", line!!)
                 }
             }
+            log("BRIDGE stderr stream ended")
         }.start()
 
         // Monitor exit
         Thread {
             val exitCode = bridgeProcess?.waitFor()
             isBridgeRunning = false
-            Log.w(TAG, "Bridge exited with code: $exitCode")
+            Log.w(TAG, "Bridge process EXITED with code: $exitCode")
             sendEventToJS("BRIDGE_EXIT", exitCode?.toString() ?: "-1")
 
             if (!shouldStop) {
@@ -177,6 +243,7 @@ class BridgeForegroundService : Service() {
                 Thread.sleep(3000)
                 if (!shouldStop) {
                     try {
+                        log("BRIDGE restarting...")
                         val prootBin2 = AssetExtractor.getProotPath(applicationContext)
                         val prootLib2 = AssetExtractor.getProotLibPath(applicationContext)
                         startBridgeServer(prootBin2, rootfsDir, prootLib2)
@@ -186,8 +253,6 @@ class BridgeForegroundService : Service() {
                 }
             }
         }.start()
-
-        isBridgeRunning = true
     }
 
     private fun startOpenCodeServer(prootBin: File, rootfsDir: File, prootLibDir: File) {
@@ -201,6 +266,8 @@ class BridgeForegroundService : Service() {
             "exec opencode serve --hostname 0.0.0.0 --port 4096"
         )
 
+        log("OPENCODE CMD: ${cmd.joinToString(" ")}")
+
         val env = mapOf(
             "HOME" to "/root",
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -209,16 +276,18 @@ class BridgeForegroundService : Service() {
         )
 
         opencodeProcess = launchProcess(cmd, env)
+        log("OPENCODE process started, pid=${opencodeProcess?.toString()}")
 
         // Stream stdout
         Thread {
             BufferedReader(InputStreamReader(opencodeProcess!!.inputStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    Log.d(TAG, "[opencode] $line")
+                    Log.d(TAG, "[opencode stdout] $line")
                     sendEventToJS("OPENCODE_STDOUT", line!!)
                 }
             }
+            log("OPENCODE stdout stream ended")
         }.start()
 
         // Stream stderr
@@ -226,17 +295,18 @@ class BridgeForegroundService : Service() {
             BufferedReader(InputStreamReader(opencodeProcess!!.errorStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    Log.w(TAG, "[opencode err] $line")
+                    Log.w(TAG, "[opencode stderr] $line")
                     sendEventToJS("OPENCODE_STDERR", line!!)
                 }
             }
+            log("OPENCODE stderr stream ended")
         }.start()
 
         // Monitor exit
         Thread {
             val exitCode = opencodeProcess?.waitFor()
             isOpenCodeRunning = false
-            Log.w(TAG, "OpenCode exited with code: $exitCode")
+            Log.w(TAG, "OpenCode process EXITED with code: $exitCode")
             sendEventToJS("OPENCODE_EXIT", exitCode?.toString() ?: "-1")
 
             if (!shouldStop) {
@@ -244,6 +314,7 @@ class BridgeForegroundService : Service() {
                 Thread.sleep(3000)
                 if (!shouldStop) {
                     try {
+                        log("OPENCODE restarting...")
                         val prootBin2 = AssetExtractor.getProotPath(applicationContext)
                         val prootLib2 = AssetExtractor.getProotLibPath(applicationContext)
                         startOpenCodeServer(prootBin2, rootfsDir, prootLib2)
@@ -253,14 +324,13 @@ class BridgeForegroundService : Service() {
                 }
             }
         }.start()
-
-        isOpenCodeRunning = true
     }
 
     private fun launchProcess(cmd: List<String>, env: Map<String, String>): Process {
         val pb = ProcessBuilder(cmd)
         pb.redirectErrorStream(false)
         pb.environment().putAll(env)
+        pb.directory(File("/"))
         return pb.start()
     }
 
@@ -275,6 +345,8 @@ class BridgeForegroundService : Service() {
             command
         )
 
+        log("PROOT CMD: ${cmd.joinToString(" ")}")
+
         val env = mutableMapOf(
             "HOME" to "/root",
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -284,60 +356,84 @@ class BridgeForegroundService : Service() {
         }
 
         val process = launchProcess(cmd, env)
+
+        // Stream output
+        Thread {
+            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    log("PROOT stdout: $line")
+                }
+            }
+        }.start()
+        Thread {
+            BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    Log.w(TAG, "PROOT stderr: $line")
+                }
+            }
+        }.start()
+
         val exitCode = process.waitFor()
-        Log.i(TAG, "Proot command exited: $exitCode")
+        log("PROOT command exited: $exitCode")
     }
 
     private fun waitForBridge(timeoutSeconds: Int) {
         var attempts = 0
         while (attempts < timeoutSeconds) {
-            if (isPortOpen(8765)) {
+            try {
+                val socket = java.net.Socket("127.0.0.1", 8765)
+                socket.close()
                 isBridgeRunning = true
-                Log.i(TAG, "Bridge is ready")
+                log("BRIDGE ready after ${attempts}s on port 8765")
                 return
+            } catch (e: java.net.ConnectException) {
+                if (attempts % 10 == 0) {
+                    log("BRIDGE port 8765 not ready (attempt ${attempts + 1}/${timeoutSeconds}): ${e.message}")
+                }
+            } catch (e: Exception) {
+                if (attempts % 10 == 0) {
+                    log("BRIDGE port 8765 check error (attempt ${attempts + 1}/${timeoutSeconds}): ${e.javaClass.simpleName}: ${e.message}")
+                }
             }
             Thread.sleep(1000)
             attempts++
         }
-        Log.w(TAG, "Bridge did not become ready within ${timeoutSeconds}s")
+        throw IllegalStateException("Bridge did not start within ${timeoutSeconds}s on port 8765")
     }
 
     private fun waitForOpenCode(timeoutSeconds: Int) {
         var attempts = 0
         while (attempts < timeoutSeconds) {
-            if (isHttpOk("http://127.0.0.1:4096/global/health")) {
-                isOpenCodeRunning = true
-                Log.i(TAG, "OpenCode is ready")
-                return
+            try {
+                val conn = URL("http://127.0.0.1:4096/global/health").openConnection() as HttpURLConnection
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                conn.requestMethod = "GET"
+                val code = conn.responseCode
+                conn.disconnect()
+                if (code == 200) {
+                    isOpenCodeRunning = true
+                    log("OPENCODE ready after ${attempts}s on port 4096 (HTTP $code)")
+                    return
+                }
+                if (attempts % 10 == 0) {
+                    log("OPENCODE health returned HTTP $code (attempt ${attempts + 1}/${timeoutSeconds})")
+                }
+            } catch (e: java.net.ConnectException) {
+                if (attempts % 10 == 0) {
+                    log("OPENCODE port 4096 not ready (attempt ${attempts + 1}/${timeoutSeconds}): ${e.message}")
+                }
+            } catch (e: Exception) {
+                if (attempts % 10 == 0) {
+                    log("OPENCODE health check error (attempt ${attempts + 1}/${timeoutSeconds}): ${e.javaClass.simpleName}: ${e.message}")
+                }
             }
             Thread.sleep(1000)
             attempts++
         }
-        Log.w(TAG, "OpenCode did not become ready within ${timeoutSeconds}s")
-    }
-
-    private fun isPortOpen(port: Int): Boolean {
-        return try {
-            val socket = java.net.Socket("127.0.0.1", port)
-            socket.close()
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun isHttpOk(url: String): Boolean {
-        return try {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.connectTimeout = 2000
-            conn.readTimeout = 2000
-            conn.requestMethod = "GET"
-            val code = conn.responseCode
-            conn.disconnect()
-            code == 200
-        } catch (e: Exception) {
-            false
-        }
+        throw IllegalStateException("OpenCode did not start within ${timeoutSeconds}s on port 4096")
     }
 
     private fun startHealthCheck() {
@@ -347,26 +443,38 @@ class BridgeForegroundService : Service() {
                     Thread.sleep(5000)
 
                     // Check bridge
-                    if (!isPortOpen(8765)) {
+                    var bridgeOk = false
+                    try {
+                        val s = java.net.Socket("127.0.0.1", 8765)
+                        s.close()
+                        bridgeOk = true
+                    } catch (_: Exception) {}
+
+                    if (!bridgeOk) {
                         isBridgeRunning = false
-                        Log.w(TAG, "Bridge health check failed")
+                        Log.w(TAG, "HEALTH: Bridge DOWN")
                         sendEventToJS("HEALTH_CHECK", "bridge_down")
                     }
 
                     // Check OpenCode
-                    if (!isHttpOk("http://127.0.0.1:4096/global/health")) {
+                    var opencodeOk = false
+                    try {
+                        val conn = URL("http://127.0.0.1:4096/global/health").openConnection() as HttpURLConnection
+                        conn.connectTimeout = 2000
+                        conn.readTimeout = 2000
+                        conn.requestMethod = "GET"
+                        opencodeOk = conn.responseCode == 200
+                        conn.disconnect()
+                    } catch (_: Exception) {}
+
+                    if (!opencodeOk) {
                         isOpenCodeRunning = false
-                        Log.w(TAG, "OpenCode health check failed")
+                        Log.w(TAG, "HEALTH: OpenCode DOWN")
                         sendEventToJS("HEALTH_CHECK", "opencode_down")
                     }
 
-                    // Update notification
-                    val status = buildString {
-                        append("Bridge")
-                        append(if (isBridgeRunning) " ✓" else " ✗")
-                        append(" | OpenCode")
-                        append(if (isOpenCodeRunning) " ✓" else " ✗")
-                    }
+                    val status = "Bridge=${if (isBridgeRunning) "UP" else "DOWN"} OpenCode=${if (isOpenCodeRunning) "UP" else "DOWN"}"
+                    log("HEALTH: $status")
                     updateNotification(status)
 
                 } catch (e: InterruptedException) {
