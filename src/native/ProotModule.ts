@@ -1,53 +1,42 @@
 /**
  * ProotModule - Native Bridge for Proot Management
- * 
- * Android native module wrapper for controlling proot Linux environment
- * and foreground service lifecycle.
+ *
+ * Android native module wrapper for controlling proot Linux environment,
+ * foreground service, and process lifecycle.
  */
 
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, Platform, NativeEventEmitter } from 'react-native';
 
-interface IProotModule {
-  /**
-   * Start the bridge foreground service
-   * This will spawn proot + Node.js bridge server
-   */
-  startBridgeService(): Promise<boolean>;
-  
-  /**
-   * Stop the bridge foreground service
-   * This will terminate proot process cleanly
-   */
-  stopBridgeService(): Promise<boolean>;
-  
-  /**
-   * Check if bridge service is currently running
-   */
-  isBridgeRunning(): Promise<boolean>;
-  
-  /**
-   * Request battery optimization exemption
-   * Opens system settings for user to whitelist the app
-   */
-  requestBatteryOptimizationExemption(): Promise<boolean>;
-  
-  /**
-   * Check if battery optimization is disabled for this app
-   */
-  isBatteryOptimizationDisabled(): Promise<boolean>;
+export interface BridgeStatus {
+  prootInstalled: boolean;
+  rootfsExtracted: boolean;
+  serviceRunning: boolean;
+  bridgeRunning: boolean;
+  opencodeRunning: boolean;
 }
 
-// Type-safe native module
+interface IProotModule {
+  startBridgeService(): Promise<boolean>;
+  stopBridgeService(): Promise<boolean>;
+  isBridgeRunning(): Promise<boolean>;
+  isProotInstalled(): Promise<boolean>;
+  getBridgeStatus(): Promise<BridgeStatus>;
+  requestBatteryOptimizationExemption(): Promise<boolean>;
+  isBatteryOptimizationDisabled(): Promise<boolean>;
+  addListener(eventName: string): void;
+  removeListeners(count: number): void;
+}
+
 const LINKING_ERROR =
   `The package 'vibeshell-proot' doesn't seem to be linked. Make sure:\n\n` +
   Platform.select({ ios: "- You have run 'pod install'\n", default: '' }) +
   '- You rebuilt the app after installing the package\n' +
   '- You are not using Expo Go (proot requires native code)\n';
 
-const ProotModule: IProotModule = NativeModules.ProotModule
+const ProotModuleNative: IProotModule = NativeModules.ProotModule
   ? NativeModules.ProotModule
   : new Proxy(
-      {},
+      {} as any,
       {
         get() {
           throw new Error(LINKING_ERROR);
@@ -55,82 +44,66 @@ const ProotModule: IProotModule = NativeModules.ProotModule
       }
     );
 
-export default ProotModule;
+export default ProotModuleNative;
+
+// Event emitter for native events
+export const ProotEventEmitter = new NativeEventEmitter(ProotModuleNative);
+
+// Event types emitted by BridgeForegroundService
+export type ProotEvent =
+  | { type: 'BRIDGE_STDOUT'; data: string }
+  | { type: 'BRIDGE_STDERR'; data: string }
+  | { type: 'BRIDGE_EXIT'; data: string }
+  | { type: 'OPENCODE_STDOUT'; data: string }
+  | { type: 'OPENCODE_STDERR'; data: string }
+  | { type: 'OPENCODE_EXIT'; data: string }
+  | { type: 'HEALTH_CHECK'; data: string }
+  | { type: 'SERVICE_ERROR'; data: string };
 
 /**
- * High-level convenience functions
+ * High-level convenience class for managing the proot environment
  */
-
 export class ProotManager {
   private static instance: ProotManager;
-  
+
   private constructor() {}
-  
+
   static getInstance(): ProotManager {
     if (!ProotManager.instance) {
       ProotManager.instance = new ProotManager();
     }
     return ProotManager.instance;
   }
-  
-  /**
-   * Initialize and start bridge service
-   */
+
   async startBridge(): Promise<void> {
-    try {
-      const isRunning = await ProotModule.isBridgeRunning();
-      if (isRunning) {
-        console.log('[ProotManager] Bridge already running');
-        return;
-      }
-      
-      console.log('[ProotManager] Starting bridge service...');
-      await ProotModule.startBridgeService();
-      console.log('[ProotManager] Bridge service started');
-    } catch (error) {
-      console.error('[ProotManager] Failed to start bridge:', error);
-      throw error;
+    const status = await ProotModuleNative.getBridgeStatus();
+    if (status.serviceRunning && status.bridgeRunning && status.opencodeRunning) {
+      console.log('[ProotManager] All services already running');
+      return;
     }
+    console.log('[ProotManager] Starting services...');
+    await ProotModuleNative.startBridgeService();
   }
-  
-  /**
-   * Stop bridge service
-   */
+
   async stopBridge(): Promise<void> {
-    try {
-      console.log('[ProotManager] Stopping bridge service...');
-      await ProotModule.stopBridgeService();
-      console.log('[ProotManager] Bridge service stopped');
-    } catch (error) {
-      console.error('[ProotManager] Failed to stop bridge:', error);
-      throw error;
-    }
+    console.log('[ProotManager] Stopping services...');
+    await ProotModuleNative.stopBridgeService();
   }
-  
-  /**
-   * Check bridge status
-   */
-  async isBridgeRunning(): Promise<boolean> {
-    return await ProotModule.isBridgeRunning();
+
+  async getStatus(): Promise<BridgeStatus> {
+    return await ProotModuleNative.getBridgeStatus();
   }
-  
-  /**
-   * Request battery optimization exemption
-   * Returns true if user needs to grant permission, false if already exempt
-   */
+
+  async isProotInstalled(): Promise<boolean> {
+    return await ProotModuleNative.isProotInstalled();
+  }
+
   async ensureBatteryOptimization(): Promise<boolean> {
     try {
-      const isDisabled = await ProotModule.isBatteryOptimizationDisabled();
-      if (isDisabled) {
-        console.log('[ProotManager] Battery optimization already disabled');
-        return false;
-      }
-      
-      console.log('[ProotManager] Requesting battery optimization exemption...');
-      const requested = await ProotModule.requestBatteryOptimizationExemption();
-      return requested;
-    } catch (error) {
-      console.error('[ProotManager] Battery optimization check failed:', error);
+      const isDisabled = await ProotModuleNative.isBatteryOptimizationDisabled();
+      if (isDisabled) return false;
+      return await ProotModuleNative.requestBatteryOptimizationExemption();
+    } catch {
       return false;
     }
   }

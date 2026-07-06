@@ -29,6 +29,7 @@ function withProotModule(config) {
       'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
       'android.permission.WAKE_LOCK',
       'android.permission.INTERNET',
+      'android.permission.POST_NOTIFICATIONS',
     ];
 
     permissions.forEach((permission) => {
@@ -92,15 +93,21 @@ function withProotModule(config) {
     }
 
     // ProotPackage'ı packages listesine ekle (eğer yoksa)
-    const packageRegistration = 'packages.add(ProotPackage())';
+    const packageRegistration = 'add(ProotPackage())';
     if (!mainApplication.includes(packageRegistration)) {
-      // getPackages() içindeki listeye ekle
-      // Expo generated MainApplication'da genelde "packages.addAll(getExpoPackages())" var
-      // Bu yüzden ondan önce ekliyoruz
-      mainApplication = mainApplication.replace(
-        /packages\.addAll\(getExpoPackages\(\)\)/,
-        `packages.add(ProotPackage())\n      packages.addAll(getExpoPackages())`
-      );
+      // Modern Expo: PackageList(this).packages.apply { ... }
+      // Eski Expo: packages.addAll(getExpoPackages())
+      if (mainApplication.includes('PackageList(this).packages.apply')) {
+        mainApplication = mainApplication.replace(
+          /PackageList\(this\)\.packages\.apply\s*\{/,
+          `PackageList(this).packages.apply {\n        add(ProotPackage())`
+        );
+      } else if (mainApplication.includes('packages.addAll(getExpoPackages())')) {
+        mainApplication = mainApplication.replace(
+          /packages\.addAll\(getExpoPackages\(\)\)/,
+          `packages.add(ProotPackage())\n      packages.addAll(getExpoPackages())`
+        );
+      }
     }
 
     config.modResults.contents = mainApplication;

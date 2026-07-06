@@ -191,10 +191,7 @@ export class WebSocketClient {
 
     const response = data as BridgeResponse;
     if (response.error) {
-      const errorMsg = typeof response.error === 'string' 
-        ? response.error 
-        : response.error.message;
-      pending.reject(new Error(errorMsg));
+      pending.reject(new Error(response.error));
     } else {
       pending.resolve(response.result);
     }

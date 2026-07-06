@@ -1,54 +1,50 @@
-// Chat store — manages conversation state, messages, and agent execution
-// Central store for the chat UI
+// Chat store (v2) — manages messages via OpenCode API
 
 import { create } from 'zustand';
-import { ChatMessage, ToolCallDisplay, Message, ContentBlock } from '../agent/types';
-import { runAgentLoop } from '../agent/AgentLoop';
-import { useSettings } from './useSettings';
+import { useOpenCodeStore } from './useOpenCodeStore';
 import { useWorkspaces } from './useWorkspaces';
+import type { UIMessage, UIToolCall, MessagePart } from '../opencode/types';
+import type { OpenCodeEvent } from '../opencode/events';
+import {
+  sendMessage as apiSendMessage,
+  sendMessageAsync,
+  getMessages,
+} from '../opencode/sessions';
 
 function generateId(): string {
   return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
 interface ChatState {
-  messages: ChatMessage[];
+  messages: UIMessage[];
   isRunning: boolean;
-  abortController: AbortController | null;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-
-  // Internal conversation state (for AI)
-  conversationMessages: Message[];
+  currentSessionId: string | null;
 
   // Actions
   sendMessage: (text: string) => Promise<void>;
   stopAgent: () => void;
   clearChat: () => void;
+  loadHistory: (sessionId: string) => Promise<void>;
+  setSession: (sessionId: string | null) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isRunning: false,
-  abortController: null,
-  totalInputTokens: 0,
-  totalOutputTokens: 0,
-  conversationMessages: [],
+  currentSessionId: null,
 
   sendMessage: async (text: string) => {
     if (get().isRunning) return;
 
-    const settings = useSettings.getState();
-    const workspace = useWorkspaces.getState().getActiveWorkspace();
-
-    if (!settings.apiKey) {
+    const { client, currentSessionId, selectedAgent } = useOpenCodeStore.getState();
+    if (!client) {
       set((state) => ({
         messages: [
           ...state.messages,
           {
             id: generateId(),
             role: 'system',
-            content: '⚠️ API key ayarlanmamış. Ayarlar\'dan OpenRouter API key\'inizi girin.',
+            content: 'OpenCode server bagli degil. Ayarlardan sunucu adresini kontrol edin.',
             timestamp: Date.now(),
           },
         ],
@@ -56,29 +52,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
 
+    const workspace = useWorkspaces.getState().getActiveWorkspace();
+
+    // Create session if needed
+    let sessionId = currentSessionId;
+    if (!sessionId) {
+      try {
+        const session = await useOpenCodeStore.getState().createSession(
+          workspace?.name || 'Chat',
+        );
+        sessionId = session.id;
+        set({ currentSessionId: sessionId });
+        useOpenCodeStore.getState().setCurrentSession(sessionId);
+      } catch (err) {
+        set((state) => ({
+          messages: [
+            ...state.messages,
+            {
+              id: generateId(),
+              role: 'system',
+              content: `Session olusturulamadi: ${err instanceof Error ? err.message : String(err)}`,
+              timestamp: Date.now(),
+            },
+          ],
+        }));
+        return;
+      }
+    }
+
     // Add user message
-    const userMsg: ChatMessage = {
+    const userMsg: UIMessage = {
       id: generateId(),
       role: 'user',
       content: text,
       timestamp: Date.now(),
     };
 
-    // Add user message to internal conversation
-    const userContent: ContentBlock[] = [{ type: 'text', text }];
-    const updatedConversation: Message[] = [
-      ...get().conversationMessages,
-      { role: 'user', content: userContent },
-    ];
-
-    const abortController = new AbortController();
-
-    // Add a placeholder assistant message
+    // Add placeholder assistant message
     const assistantMsgId = generateId();
-    const assistantMsg: ChatMessage = {
+    const assistantMsg: UIMessage = {
       id: assistantMsgId,
       role: 'assistant',
       content: '',
+      parts: [],
       toolCalls: [],
       timestamp: Date.now(),
       isStreaming: true,
@@ -87,135 +103,214 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       messages: [...get().messages, userMsg, assistantMsg],
       isRunning: true,
-      abortController,
-      conversationMessages: updatedConversation,
     });
 
-    const workspacePath = workspace?.path || '/data/data/com.termux/files/home';
+    // Listen for real-time events
+    const unsubscribe = useOpenCodeStore.getState().onEvent((event: OpenCodeEvent) => {
+      if (event.sessionID !== sessionId) return;
+
+      if (event.type === 'message.part.updated' || event.type === 'message.part.created') {
+        const part = event.properties as any;
+        if (part?.type === 'text' && part?.text) {
+          // Text streaming update
+          set((state) => ({
+            messages: state.messages.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: (m.content || '') + part.text }
+                : m,
+            ),
+          }));
+        } else if (part?.type === 'tool_call') {
+          // Tool call started
+          const toolCall: UIToolCall = {
+            id: part.toolCallID || generateId(),
+            name: part.name || 'unknown',
+            input: part.parameters || {},
+            isRunning: true,
+          };
+          set((state) => ({
+            messages: state.messages.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, toolCalls: [...(m.toolCalls || []), toolCall] }
+                : m,
+            ),
+          }));
+        } else if (part?.type === 'tool_result') {
+          // Tool call completed
+          set((state) => ({
+            messages: state.messages.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    toolCalls: (m.toolCalls || []).map((tc) =>
+                      tc.id === part.toolCallID
+                        ? { ...tc, result: part.result, isError: part.isError, isRunning: false }
+                        : tc,
+                    ),
+                  }
+                : m,
+            ),
+          }));
+        } else if (part?.type === 'file_rewrite' || part?.type === 'file_write') {
+          // File change — add as tool call display
+          const toolCall: UIToolCall = {
+            id: generateId(),
+            name: part.type === 'file_write' ? 'write_file' : 'apply_patch',
+            input: { path: part.path, content: part.content || part.diff },
+            result: 'OK',
+            isRunning: false,
+          };
+          set((state) => ({
+            messages: state.messages.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, toolCalls: [...(m.toolCalls || []), toolCall] }
+                : m,
+            ),
+          }));
+        } else if (part?.type === 'shell_exec') {
+          // Shell execution
+          const toolCall: UIToolCall = {
+            id: generateId(),
+            name: 'run_command',
+            input: { command: part.command },
+            result: part.output || '',
+            isError: part.exitCode !== 0,
+            isRunning: false,
+          };
+          set((state) => ({
+            messages: state.messages.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, toolCalls: [...(m.toolCalls || []), toolCall] }
+                : m,
+            ),
+          }));
+        }
+      } else if (event.type === 'step.finished') {
+        // Step done — could update usage info
+      }
+    });
 
     try {
-      const resultMessages = await runAgentLoop(
-        settings.apiKey,
-        settings.model,
-        settings.systemPrompt,
-        updatedConversation,
-        workspacePath,
-        {
-          onAssistantText: (text: string) => {
-            set((state) => ({
-              messages: state.messages.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, content: m.content + text }
-                  : m,
-              ),
-            }));
-          },
-          onToolCall: (id: string, name: string, input: Record<string, unknown>) => {
-            const toolCall: ToolCallDisplay = {
-              id,
-              name,
-              input,
-              isRunning: true,
-            };
-            set((state) => ({
-              messages: state.messages.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, toolCalls: [...(m.toolCalls || []), toolCall] }
-                  : m,
-              ),
-            }));
-          },
-          onToolResult: (id: string, result: string, isError: boolean) => {
-            set((state) => ({
-              messages: state.messages.map((m) =>
-                m.id === assistantMsgId
-                  ? {
-                      ...m,
-                      toolCalls: (m.toolCalls || []).map((tc) =>
-                        tc.id === id
-                          ? { ...tc, result, isError, isRunning: false }
-                          : tc,
-                      ),
-                    }
-                  : m,
-              ),
-            }));
-          },
-          onComplete: () => {
-            set((state) => ({
-              messages: state.messages.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, isStreaming: false }
-                  : m,
-              ),
-              isRunning: false,
-              abortController: null,
-            }));
-          },
-          onError: (error: string) => {
-            set((state) => ({
-              messages: [
-                ...state.messages.map((m) =>
-                  m.id === assistantMsgId
-                    ? { ...m, isStreaming: false }
-                    : m,
-                ),
-                {
-                  id: generateId(),
-                  role: 'system' as const,
-                  content: `❌ Hata: ${error}`,
-                  timestamp: Date.now(),
-                },
-              ],
-              isRunning: false,
-              abortController: null,
-            }));
-          },
-          onUsage: (input: number, output: number) => {
-            set((state) => ({
-              totalInputTokens: state.totalInputTokens + input,
-              totalOutputTokens: state.totalOutputTokens + output,
-            }));
-          },
-        },
-        abortController.signal,
-      );
+      // Send message to OpenCode (synchronous — waits for full response)
+      const response = await apiSendMessage(client, sessionId!, text, {
+        ...(selectedAgent && { agent: selectedAgent }),
+      });
 
-      set({ conversationMessages: resultMessages });
+      // Build final message from response parts
+      let finalContent = '';
+      const finalToolCalls: UIToolCall[] = [];
+
+      if (response.parts) {
+        for (const part of response.parts) {
+          if ((part as any).type === 'text') {
+            finalContent += (part as any).text || '';
+          } else if ((part as any).type === 'tool_call') {
+            finalToolCalls.push({
+              id: (part as any).toolCallID || generateId(),
+              name: (part as any).name || 'unknown',
+              input: (part as any).parameters || {},
+              result: undefined,
+              isRunning: false,
+            });
+          }
+        }
+      }
+
+      set((state) => ({
+        messages: state.messages.map((m) =>
+          m.id === assistantMsgId
+            ? {
+                ...m,
+                content: finalContent || m.content,
+                toolCalls: finalToolCalls.length > 0 ? finalToolCalls : m.toolCalls,
+                isStreaming: false,
+              }
+            : m,
+        ),
+        isRunning: false,
+      }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const msg = error instanceof Error ? error.message : String(error);
       set((state) => ({
         messages: [
-          ...state.messages,
+          ...state.messages.map((m) =>
+            m.id === assistantMsgId ? { ...m, isStreaming: false } : m,
+          ),
           {
             id: generateId(),
-            role: 'system' as const,
-            content: `❌ Hata: ${message}`,
+            role: 'system',
+            content: `Hata: ${msg}`,
             timestamp: Date.now(),
           },
         ],
         isRunning: false,
-        abortController: null,
       }));
+    } finally {
+      unsubscribe();
     }
   },
 
-  stopAgent: () => {
-    const { abortController } = get();
-    if (abortController) {
-      abortController.abort();
+  stopAgent: async () => {
+    const { currentSessionId } = get();
+    if (currentSessionId) {
+      await useOpenCodeStore.getState().abortSession(currentSessionId);
     }
-    set({ isRunning: false, abortController: null });
+    set({ isRunning: false });
   },
 
   clearChat: () => {
     set({
       messages: [],
-      conversationMessages: [],
       isRunning: false,
-      abortController: null,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
+      currentSessionId: null,
     });
+  },
+
+  loadHistory: async (sessionId: string) => {
+    const { client } = useOpenCodeStore.getState();
+    if (!client) return;
+
+    try {
+      const history = await getMessages(client, sessionId);
+      const uiMessages: UIMessage[] = [];
+
+      for (const msg of history) {
+        const parts = msg.parts || [];
+        let content = '';
+        const toolCalls: UIToolCall[] = [];
+
+        for (const part of parts) {
+          if ((part as any).type === 'text') {
+            content += (part as any).text || '';
+          } else if ((part as any).type === 'tool_call') {
+            toolCalls.push({
+              id: (part as any).toolCallID || generateId(),
+              name: (part as any).name || 'unknown',
+              input: (part as any).parameters || {},
+              isRunning: false,
+            });
+          }
+        }
+
+        uiMessages.push({
+          id: msg.info.id || generateId(),
+          role: (msg.info as any).role || 'assistant',
+          content,
+          toolCalls,
+          timestamp: Date.now(),
+        });
+      }
+
+      set({ messages: uiMessages, currentSessionId: sessionId });
+    } catch (err) {
+      console.error('[Chat] Failed to load history:', err);
+    }
+  },
+
+  setSession: (sessionId: string | null) => {
+    set({ currentSessionId: sessionId });
+    if (sessionId) {
+      get().loadHistory(sessionId);
+    }
   },
 }));

@@ -1,223 +1,171 @@
 #!/bin/bash
 set -e
 
-# VibeShell Rootfs Builder
-# Bu script Alpine Linux minimal rootfs'i indirir, Node.js kurar ve bridge server'ı hazırlar
+# VibeShell Rootfs Builder (v5 — ARM64, minimal, no Docker)
+# Downloads Alpine ARM64 minirootfs + Node.js ARM64 static + opencode ARM64
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 WORK_DIR="${SCRIPT_DIR}/work"
-ALPINE_VERSION="3.19"
-NODE_VERSION="20"
 
-# Renk kodları
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+ALPINE_VERSION="3.21"
+NODE_VERSION="22.16.0"
+OPENCODE_VERSION="1.17.13"
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Temizlik ve hazırlık
 prepare_dirs() {
-    log_info "Dizinler hazırlanıyor..."
+    log_info "Preparing directories..."
+    local proot_backup=""
+    if [ -d "${OUTPUT_DIR}/proot-bundle-arm64-v8a" ]; then
+        proot_backup=$(mktemp -d)
+        cp -r "${OUTPUT_DIR}/proot-bundle-arm64-v8a" "${proot_backup}/"
+    fi
     rm -rf "${WORK_DIR}" "${OUTPUT_DIR}"
     mkdir -p "${WORK_DIR}" "${OUTPUT_DIR}"
+    if [ -n "$proot_backup" ] && [ -d "${proot_backup}/proot-bundle-arm64-v8a" ]; then
+        cp -r "${proot_backup}/proot-bundle-arm64-v8a" "${OUTPUT_DIR}/"
+        rm -rf "$proot_backup"
+    fi
 }
 
-# Alpine miniroot indir
-download_alpine() {
-    local arch=$1
-    local alpine_arch=""
-    
-    case $arch in
-        arm64-v8a)
-            alpine_arch="aarch64"
-            ;;
-        armeabi-v7a)
-            alpine_arch="armv7"
-            ;;
-        *)
-            log_error "Desteklenmeyen mimari: $arch"
-            return 1
-            ;;
-    esac
-    
-    log_info "Alpine Linux $ALPINE_VERSION ($alpine_arch) indiriliyor..."
-    
-    local url="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/${alpine_arch}/alpine-minirootfs-${ALPINE_VERSION}.0-${alpine_arch}.tar.gz"
-    local tarball="${WORK_DIR}/alpine-${arch}.tar.gz"
-    
-    if ! curl -fsSL "$url" -o "$tarball"; then
-        log_error "Alpine rootfs indirilemedi!"
-        return 1
-    fi
-    
-    if [ ! -f "$tarball" ]; then
-        log_error "Alpine rootfs dosyası oluşturulamadı!"
-        return 1
-    fi
-    
-    local size=$(du -h "$tarball" | cut -f1)
-    log_info "Alpine rootfs indirildi: $size"
-    
-    echo "$tarball"
+download_alpine_minirootfs() {
+    log_info "Downloading Alpine ARM64 minirootfs..."
+    local url="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/alpine-minirootfs-${ALPINE_VERSION}.0-aarch64.tar.gz"
+    curl -fsSL -o "${WORK_DIR}/alpine.tar.gz" "$url"
+    mkdir -p "${WORK_DIR}/rootfs"
+    tar -xzf "${WORK_DIR}/alpine.tar.gz" -C "${WORK_DIR}/rootfs"
+    rm "${WORK_DIR}/alpine.tar.gz"
+    log_info "Alpine ARM64 minirootfs ready"
 }
 
-# Rootfs'i extract et ve hazırla
-prepare_rootfs() {
-    local tarball=$1
-    local arch=$2
-    local rootfs_dir="${WORK_DIR}/rootfs-${arch}"
-    
-    log_info "Rootfs extract ediliyor: $arch"
-    mkdir -p "$rootfs_dir"
-    tar -xzf "$tarball" -C "$rootfs_dir"
-    
-    # DNS resolver
-    echo "nameserver 8.8.8.8" > "${rootfs_dir}/etc/resolv.conf"
-    
-    # APK repository
-    cat > "${rootfs_dir}/etc/apk/repositories" <<EOF
+install_nodejs_arm64() {
+    log_info "Installing Node.js ${NODE_VERSION} ARM64..."
+    local url="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.xz"
+    curl -fsSL -o "${WORK_DIR}/node.tar.xz" "$url"
+    tar -xJf "${WORK_DIR}/node.tar.xz" -C "${WORK_DIR}"
+
+    local nd="${WORK_DIR}/node-v${NODE_VERSION}-linux-arm64"
+    mkdir -p "${WORK_DIR}/rootfs/usr/local/bin"
+    mkdir -p "${WORK_DIR}/rootfs/usr/local/lib/node_modules/npm"
+
+    cp "${nd}/bin/node" "${WORK_DIR}/rootfs/usr/local/bin/"
+    cp "${nd}/bin/npm" "${WORK_DIR}/rootfs/usr/local/bin/"
+    cp "${nd}/bin/npx" "${WORK_DIR}/rootfs/usr/local/bin/"
+    cp -r "${nd}/lib/node_modules/npm/"* "${WORK_DIR}/rootfs/usr/local/lib/node_modules/npm/"
+
+    rm -rf "${nd}" "${WORK_DIR}/node.tar.xz"
+    log_info "Node.js ARM64 ready"
+}
+
+install_opencode_arm64() {
+    log_info "Installing opencode-ai ARM64..."
+
+    local tmp="${WORK_DIR}/opencode-tmp"
+    mkdir -p "$tmp"
+
+    # Download opencode main package + ARM64 binary separately
+    cd "$tmp"
+
+    # 1. Install opencode-ai on HOST to get JS code (ignore platform binaries)
+    npm init -y >/dev/null 2>&1
+    npm install opencode-ai --ignore-scripts --no-optional >/dev/null 2>&1 || true
+
+    # 2. Download ARM64 binary directly
+    npm pack "opencode-linux-arm64@${OPENCODE_VERSION}" >/dev/null 2>&1
+    mkdir -p arm64-extract
+    tar -xzf "opencode-linux-arm64-${OPENCODE_VERSION}.tgz" -C arm64-extract
+    chmod +x arm64-extract/package/bin/opencode
+
+    # 3. Assemble: JS code + ARM64 binary
+    local dest="${WORK_DIR}/rootfs/usr/local/lib/node_modules/opencode-ai"
+    mkdir -p "$dest"
+
+    # Copy JS code (no native binaries)
+    cp -r node_modules/opencode-ai/* "$dest/" 2>/dev/null || true
+    # Remove x64 binaries that npm pulled
+    rm -rf "$dest/opencode-linux-x64" "$dest/opencode-linux-x64-baseline"
+    rm -rf "$dest/node_modules"
+
+    # Copy ARM64 binary
+    mkdir -p "$dest/opencode-linux-arm64"
+    cp arm64-extract/package/bin/opencode "$dest/opencode-linux-arm64/"
+    chmod +x "$dest/opencode-linux-arm64/opencode"
+    cp arm64-extract/package/package.json "$dest/opencode-linux-arm64/"
+
+    # Create launcher
+    mkdir -p "${WORK_DIR}/rootfs/usr/local/bin"
+    cat > "${WORK_DIR}/rootfs/usr/local/bin/opencode" << 'EOF'
+#!/bin/sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "${SCRIPT_DIR}/../lib/node_modules/opencode-ai/opencode-linux-arm64/opencode" "$@"
+EOF
+    chmod +x "${WORK_DIR}/rootfs/usr/local/bin/opencode"
+
+    cd "$SCRIPT_DIR"
+    rm -rf "$tmp"
+    log_info "opencode ARM64 ready"
+}
+
+setup_rootfs() {
+    log_info "Setting up rootfs..."
+
+    mkdir -p "${WORK_DIR}/rootfs"/{dev,proc,sys,tmp,run,root/bridge}
+    mkdir -p "${WORK_DIR}/rootfs/etc/apk"
+
+    echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > "${WORK_DIR}/rootfs/etc/resolv.conf"
+    cat > "${WORK_DIR}/rootfs/etc/apk/repositories" << EOF
 https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main
 https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community
 EOF
-    
-    log_info "Node.js ve bağımlılıklar kuruluyor..."
-    
-    # proot ile chroot yapıp Node.js kurulumu
-    # Not: Bu aşamada host sistemde proot olmalı veya docker kullanabiliriz
-    # Şimdilik dökümante ediyoruz, gerçek kurulum için docker container kullanacağız
-    
-    echo "$rootfs_dir"
+    echo -e 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nexport HOME=/root' > "${WORK_DIR}/rootfs/etc/profile"
+
+    # Bridge server
+    log_info "Copying bridge server..."
+    cp -r "${SCRIPT_DIR}/../bridge/"* "${WORK_DIR}/rootfs/root/bridge/"
+    cd "${WORK_DIR}/rootfs/root/bridge"
+    npm install --omit=dev 2>/dev/null || true
+    cd "$SCRIPT_DIR"
+
+    # Clean up aggressively
+    log_info "Cleaning up..."
+    rm -rf "${WORK_DIR}/rootfs/root/.npm" "${WORK_DIR}/rootfs/var/cache/apk"/*
+    rm -rf "${WORK_DIR}/rootfs/usr/share/man" "${WORK_DIR}/rootfs/usr/share/doc"
+    rm -rf "${WORK_DIR}/rootfs/tmp"/*
+    find "${WORK_DIR}/rootfs" -name "*.md" -delete 2>/dev/null || true
+    find "${WORK_DIR}/rootfs" -name "LICENSE*" -delete 2>/dev/null || true
+    find "${WORK_DIR}/rootfs" -name "CHANGELOG*" -delete 2>/dev/null || true
+    find "${WORK_DIR}/rootfs" -name "*.map" -delete 2>/dev/null || true
 }
 
-# Bridge server'ı rootfs'e kopyala
-install_bridge_server() {
-    local rootfs_dir=$1
-    
-    log_info "Bridge server rootfs'e kopyalanıyor..."
-    
-    local bridge_src="${SCRIPT_DIR}/../bridge"
-    local bridge_dest="${rootfs_dir}/root/bridge"
-    
-    if [ ! -d "$bridge_src" ]; then
-        log_error "Bridge server bulunamadı: $bridge_src"
-        return 1
-    fi
-    
-    mkdir -p "$bridge_dest"
-    cp -r "${bridge_src}"/* "$bridge_dest/"
-    
-    log_info "Bridge server kopyalandı"
-}
-
-# Rootfs'i sıkıştır
 compress_rootfs() {
-    local rootfs_dir=$1
-    local arch=$2
-    local output_file="${OUTPUT_DIR}/vibeshell-rootfs-${arch}.tar.xz"
-    
-    log_info "Rootfs sıkıştırılıyor (bu biraz zaman alabilir)..."
-    
-    tar -cJf "$output_file" -C "$rootfs_dir" .
-    
+    local output_file="${OUTPUT_DIR}/rootfs.tar.gz"
+    log_info "Compressing rootfs..."
+    tar -czf "$output_file" -C "${WORK_DIR}/rootfs" .
     local size=$(du -h "$output_file" | cut -f1)
-    log_info "✓ Rootfs hazır: $output_file ($size)"
-    
-    # Checksum oluştur
+    log_info "Rootfs: $output_file ($size)"
     sha256sum "$output_file" > "${output_file}.sha256"
-    
-    echo "$output_file"
 }
 
-# Ana build fonksiyonu
-build_for_arch() {
-    local arch=$1
-    
-    log_info "========================================="
-    log_info "Build başlatılıyor: $arch"
-    log_info "========================================="
-    
-    local tarball=$(download_alpine "$arch")
-    local rootfs_dir=$(prepare_rootfs "$tarball" "$arch")
-    install_bridge_server "$rootfs_dir"
-    local output=$(compress_rootfs "$rootfs_dir" "$arch")
-    
-    log_info "✓ $arch için build tamamlandı!"
-}
-
-# Docker ile build (önerilen yöntem - host sistem kirletmeden)
-build_with_docker() {
-    log_info "Docker container ile build başlatılıyor..."
-    
-    cat > "${WORK_DIR}/Dockerfile" <<'EOF'
-FROM alpine:3.19
-
-RUN apk add --no-cache \
-    bash \
-    curl \
-    tar \
-    xz \
-    nodejs \
-    npm \
-    git
-
-WORKDIR /build
-COPY . .
-
-CMD ["/bin/bash"]
-EOF
-    
-    log_warn "Docker build henüz implement edilmedi - manual build kullan"
-}
-
-# Script kullanım bilgisi
-usage() {
-    echo "Kullanım: $0 [arm64-v8a|armeabi-v7a|all]"
-    echo ""
-    echo "Örnekler:"
-    echo "  $0 arm64-v8a        # Sadece ARM64 için build"
-    echo "  $0 all              # Tüm mimariler için build"
-    exit 1
-}
-
-# Ana script
 main() {
-    if [ $# -eq 0 ]; then
-        usage
-    fi
-    
+    log_info "========================================="
+    log_info "VibeShell Rootfs Builder (ARM64 v5)"
+    log_info "========================================="
     prepare_dirs
-    
-    case $1 in
-        arm64-v8a|armeabi-v7a)
-            build_for_arch "$1"
-            ;;
-        all)
-            build_for_arch "arm64-v8a"
-            build_for_arch "armeabi-v7a"
-            ;;
-        *)
-            usage
-            ;;
-    esac
-    
+    download_alpine_minirootfs
+    install_nodejs_arm64
+    install_opencode_arm64
+    setup_rootfs
+    compress_rootfs
     log_info ""
-    log_info "========================================="
-    log_info "BUILD TAMAMLANDI!"
-    log_info "========================================="
-    log_info "Çıktı dizini: $OUTPUT_DIR"
+    log_info "BUILD COMPLETE!"
     ls -lh "$OUTPUT_DIR"
 }
 

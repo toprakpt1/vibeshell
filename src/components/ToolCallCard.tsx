@@ -1,8 +1,39 @@
 import React from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { TOOL_LABELS, TOOL_ICONS } from '../agent/tools';
 import { theme } from '../theme';
+
+const TOOL_ICONS: Record<string, string> = {
+  run_command: '⚙️',
+  read_file: '📖',
+  write_file: '✏️',
+  list_dir: '📂',
+  apply_patch: '🩹',
+  git_diff: '🔍',
+  git_commit: '💾',
+  bash: '⚙️',
+  file_write: '✏️',
+  file_rewrite: '🩹',
+  file_delete: '🗑️',
+  shell_exec: '⚙️',
+  question: '❓',
+};
+
+const TOOL_LABELS: Record<string, string> = {
+  run_command: 'Komut calistiriliyor',
+  read_file: 'Dosya okunuyor',
+  write_file: 'Dosya yaziliyor',
+  list_dir: 'Dizin listeleniyor',
+  apply_patch: 'Yama uygulanıyor',
+  git_diff: 'Git diff alınıyor',
+  git_commit: 'Git commit yapılıyor',
+  bash: 'Komut calistiriliyor',
+  file_write: 'Dosya yaziliyor',
+  file_rewrite: 'Dosya guncelleniyor',
+  file_delete: 'Dosya siliniyor',
+  shell_exec: 'Komut calistiriliyor',
+  question: 'Soru',
+};
 
 interface ToolCallCardProps {
   name: string;
@@ -14,28 +45,25 @@ interface ToolCallCardProps {
 
 export function ToolCallCard({ name, input, result, isError, isRunning }: ToolCallCardProps) {
   const [expanded, setExpanded] = React.useState(false);
-  
+
   const icon = TOOL_ICONS[name] || '🔧';
   const label = TOOL_LABELS[name] || name;
 
-  // Determine primary display detail based on tool name
   let detail = '';
-  if (name === 'run_command') {
-    detail = String(input.command);
-  } else if (name === 'read_file' || name === 'write_file' || name === 'delete_file') {
-    detail = String(input.path).split('/').pop() || String(input.path);
+  if (name === 'run_command' || name === 'bash' || name === 'shell_exec') {
+    detail = String(input.command || '');
+  } else if (name === 'read_file' || name === 'write_file' || name === 'file_write' || name === 'file_rewrite') {
+    detail = String(input.path || '').split('/').pop() || String(input.path || '');
   } else if (name === 'list_dir') {
-    detail = String(input.path);
-  } else if (name === 'apply_patch') {
-    detail = String(input.path);
+    detail = String(input.path || '');
   } else if (name === 'git_commit') {
-    detail = String(input.message);
+    detail = String(input.message || '');
   }
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity 
-        style={styles.header} 
+      <TouchableOpacity
+        style={styles.header}
         onPress={() => setExpanded(!expanded)}
         activeOpacity={0.7}
       >
@@ -56,10 +84,10 @@ export function ToolCallCard({ name, input, result, isError, isRunning }: ToolCa
           ) : (
             <Ionicons name="checkmark-circle" size={16} color={theme.colors.semantic.success} />
           )}
-          <Ionicons 
-            name={expanded ? 'chevron-up' : 'chevron-down'} 
-            size={16} 
-            color={theme.colors.text.muted} 
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color={theme.colors.text.muted}
           />
         </View>
       </TouchableOpacity>
@@ -72,7 +100,7 @@ export function ToolCallCard({ name, input, result, isError, isRunning }: ToolCa
               {JSON.stringify(input, null, 2)}
             </Text>
           </View>
-          
+
           {result && (
             <>
               <Text style={styles.sectionTitle}>Result:</Text>

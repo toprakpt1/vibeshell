@@ -1,13 +1,13 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { ChatMessage as ChatMessageType } from '../agent/types';
 import { ToolCallCard } from './ToolCallCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { theme } from '../theme';
+import type { UIMessage } from '../opencode/types';
 
 interface ChatMessageProps {
-  message: ChatMessageType;
+  message: UIMessage;
 }
 
 export function ChatMessage({ message }: ChatMessageProps) {
@@ -30,7 +30,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
           <Ionicons name="sparkles" size={16} color={theme.colors.brand.primary} />
         </View>
       )}
-      
+
       <View style={[styles.contentBubble, isUser && styles.userBubble]}>
         {message.content ? (
           isUser ? (

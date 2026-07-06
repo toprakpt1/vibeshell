@@ -1,91 +1,69 @@
-// Settings store — API key, model, provider, system prompt
-// Uses Zustand with secure storage for sensitive data
+// Settings store (v2) — OpenCode server + bridge config
 
 import { create } from 'zustand';
 import * as secureStorage from '../utils/secureStorage';
 
-export const AVAILABLE_MODELS = [
-  { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'openrouter' },
-  { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'openrouter' },
-  { id: 'anthropic/claude-3.5-haiku', name: 'Claude 3.5 Haiku', provider: 'openrouter' },
-  { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openrouter' },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openrouter' },
-  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'openrouter' },
-  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'openrouter' },
-  { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', provider: 'openrouter' },
-  { id: 'cohere/north-mini-code:free', name: 'Cohere North Mini (Free)', provider: 'openrouter' },
-] as const;
-
-export type ModelId = typeof AVAILABLE_MODELS[number]['id'];
-
 interface SettingsState {
-  apiKey: string;
-  model: ModelId;
+  openCodeUrl: string;
+  openCodePassword: string;
   bridgeUrl: string;
   bridgeToken: string;
-  systemPrompt: string;
+  model: string;
+  agent: string;
   hasSeenOnboarding: boolean;
   isLoaded: boolean;
 
-  // Actions
   loadSettings: () => Promise<void>;
-  setApiKey: (key: string) => Promise<void>;
-  setModel: (model: ModelId) => Promise<void>;
+  setOpenCodeUrl: (url: string) => Promise<void>;
+  setOpenCodePassword: (password: string) => Promise<void>;
   setBridgeUrl: (url: string) => Promise<void>;
   setBridgeToken: (token: string) => Promise<void>;
-  setSystemPrompt: (prompt: string) => void;
+  setModel: (model: string) => Promise<void>;
+  setAgent: (agent: string) => Promise<void>;
   setOnboardingSeen: () => Promise<void>;
 }
 
-const DEFAULT_SYSTEM_PROMPT = `You are a helpful coding assistant. You have access to tools for reading and writing files, running shell commands, and working with git. Use these tools to help the user with their coding tasks.
-
-When writing code:
-- Write clean, well-structured code
-- Add comments where helpful
-- Follow the project's existing coding conventions
-- Test your changes when possible
-
-When using tools:
-- Read files before modifying them to understand context
-- Use list_dir to explore project structure
-- Run tests after making changes
-- Make git commits with descriptive messages`;
-
 export const useSettings = create<SettingsState>((set) => ({
-  apiKey: '',
-  model: 'anthropic/claude-sonnet-4',
+  openCodeUrl: 'http://127.0.0.1:4096',
+  openCodePassword: '',
   bridgeUrl: 'ws://127.0.0.1:8765',
   bridgeToken: '',
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  model: '',
+  agent: '',
   hasSeenOnboarding: false,
   isLoaded: false,
 
   loadSettings: async () => {
-    const [apiKey, model, bridgeToken, bridgeUrl, hasSeenOnboarding] = await Promise.all([
-      secureStorage.getApiKey(),
-      secureStorage.getModel(),
-      secureStorage.getBridgeToken(),
-      secureStorage.getBridgeUrl(),
-      secureStorage.getOnboardingSeen(),
-    ]);
+    const [openCodeUrl, openCodePassword, bridgeToken, bridgeUrl, model, agent, hasSeenOnboarding] =
+      await Promise.all([
+        secureStorage.getOpenCodeUrl(),
+        secureStorage.getOpenCodePassword(),
+        secureStorage.getBridgeToken(),
+        secureStorage.getBridgeUrl(),
+        secureStorage.getModel(),
+        secureStorage.getAgent(),
+        secureStorage.getOnboardingSeen(),
+      ]);
     set({
-      apiKey: apiKey || '',
-      model: (model as ModelId) || 'anthropic/claude-sonnet-4',
+      openCodeUrl: openCodeUrl || 'http://127.0.0.1:4096',
+      openCodePassword: openCodePassword || '',
       bridgeToken: bridgeToken || '',
       bridgeUrl: bridgeUrl || 'ws://127.0.0.1:8765',
+      model: model || '',
+      agent: agent || '',
       hasSeenOnboarding,
       isLoaded: true,
     });
   },
 
-  setApiKey: async (key: string) => {
-    await secureStorage.setApiKey(key);
-    set({ apiKey: key });
+  setOpenCodeUrl: async (url: string) => {
+    await secureStorage.setOpenCodeUrl(url);
+    set({ openCodeUrl: url });
   },
 
-  setModel: async (model: ModelId) => {
-    await secureStorage.setModel(model);
-    set({ model });
+  setOpenCodePassword: async (password: string) => {
+    await secureStorage.setOpenCodePassword(password);
+    set({ openCodePassword: password });
   },
 
   setBridgeUrl: async (url: string) => {
@@ -98,7 +76,15 @@ export const useSettings = create<SettingsState>((set) => ({
     set({ bridgeToken: token });
   },
 
-  setSystemPrompt: (prompt: string) => set({ systemPrompt: prompt }),
+  setModel: async (model: string) => {
+    await secureStorage.setModel(model);
+    set({ model });
+  },
+
+  setAgent: async (agent: string) => {
+    await secureStorage.setAgent(agent);
+    set({ agent });
+  },
 
   setOnboardingSeen: async () => {
     await secureStorage.setOnboardingSeen(true);

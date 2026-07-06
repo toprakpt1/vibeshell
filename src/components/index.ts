@@ -5,3 +5,7 @@ export { ChatMessage } from './ChatMessage';
 export { ChatInput } from './ChatInput';
 export { WorkspaceCard } from './WorkspaceCard';
 export { DiffViewer } from './DiffViewer';
+export { AgentSelector } from './AgentSelector';
+export { PermissionModal } from './PermissionModal';
+export { SessionList } from './SessionList';
+export { TerminalPanel } from './TerminalPanel';

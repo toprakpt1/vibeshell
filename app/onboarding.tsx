@@ -3,22 +3,25 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSettings } from '../src/store/useSettings';
-import { useBridgeStore } from '../src/bridge';
+import { useBridgeStore } from '../src/store/useBridgeStore';
+import { useOpenCodeStore } from '../src/store/useOpenCodeStore';
 import { theme } from '../src/theme';
 
 const { ProotModule } = NativeModules;
 
-type SetupStep = 'download' | 'extract' | 'battery' | 'start' | 'done';
+type SetupStep = 'environment' | 'services' | 'battery' | 'connect' | 'done';
 
 export default function OnboardingScreen() {
   const router = useRouter();
   const { setOnboardingSeen } = useSettings();
-  const { connect, connectionState } = useBridgeStore();
+  const { connect: connectBridge } = useBridgeStore();
+  const { connect: connectOpenCode } = useOpenCodeStore();
 
-  const [currentStep, setCurrentStep] = useState<SetupStep>('download');
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('Preparing...');
+  const [currentStep, setCurrentStep] = useState<SetupStep>('environment');
+  const [statusMessage, setStatusMessage] = useState('Hazirlaniyor...');
   const [error, setError] = useState<string | null>(null);
+  const [bridgeRunning, setBridgeRunning] = useState(false);
+  const [opencodeRunning, setOpencodeRunning] = useState(false);
 
   useEffect(() => {
     startSetup();
@@ -26,110 +29,96 @@ export default function OnboardingScreen() {
 
   const startSetup = async () => {
     try {
-      // Step 1: Check if already installed
-      setCurrentStep('download');
-      setStatusMessage('Checking environment...');
+      // Step 1: Check environment
+      setCurrentStep('environment');
+      setStatusMessage('Ortam kontrol ediliyor...');
 
-      const isInstalled = await ProotModule?.isProotInstalled();
-      if (isInstalled) {
-        setStatusMessage('Already installed, starting...');
-        setDownloadProgress(100);
-        setCurrentStep('start');
-        await startBridge();
+      const status = await ProotModule?.getBridgeStatus();
+
+      if (status?.serviceRunning && status?.bridgeRunning && status?.opencodeRunning) {
+        setStatusMessage('Tum servisler calisiyor');
+        setCurrentStep('connect');
+        await connectServices();
         return;
       }
 
-      // Step 2: Download + extract (foreground service handles both)
-      setStatusMessage('Downloading Linux environment...');
-      setDownloadProgress(10);
+      // Step 2: Start services (foreground service handles extraction + install)
+      setCurrentStep('services');
+      setStatusMessage('Linux ortami hazirlaniyor...');
 
       await ProotModule?.startBridgeService();
 
-      // Poll progress until bridge is ready
-      await pollInstallProgress();
+      // Poll until both services are up
+      await pollServices();
 
       // Step 3: Battery optimization
       setCurrentStep('battery');
-      setStatusMessage('Requesting battery permission...');
-      setDownloadProgress(80);
-
+      setStatusMessage('Pil izni isteniyor...');
       try {
         await ProotModule?.requestBatteryOptimizationExemption();
       } catch {
-        // Continue even if user denies
+        // Continue even if denied
       }
 
-      // Step 4: Start bridge
-      setCurrentStep('start');
-      setStatusMessage('Starting bridge...');
-      setDownloadProgress(90);
-
-      await startBridge();
+      // Step 4: Connect
+      setCurrentStep('connect');
+      setStatusMessage('Sunuculara baglaniyor...');
+      await connectServices();
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Setup failed');
+      console.error('[Onboarding] Setup failed:', err);
+      setError(err instanceof Error ? err.message : 'Kurulum basarisiz oldu');
     }
   };
 
-  const pollInstallProgress = async () => {
-    const maxAttempts = 120; // 2 minutes max
+  const pollServices = async () => {
+    const maxAttempts = 120; // 2 minutes
     let attempts = 0;
 
     while (attempts < maxAttempts) {
       const status = await ProotModule?.getBridgeStatus();
-      const installed = status?.prootInstalled ?? false;
-      const running = status?.serviceRunning ?? false;
 
-      if (installed && running) {
-        setDownloadProgress(70);
-        setStatusMessage('Environment ready');
+      if (status?.bridgeRunning) setBridgeRunning(true);
+      if (status?.opencodeRunning) setOpencodeRunning(true);
+
+      if (status?.bridgeRunning && status?.opencodeRunning) {
+        setStatusMessage('Tum servisler hazir');
         return;
       }
 
-      if (installed) {
-        setDownloadProgress(60);
-        setStatusMessage('Starting services...');
-        return;
-      }
-
-      // Increment progress visually
-      const progress = Math.min(50, 10 + attempts * 2);
-      setDownloadProgress(progress);
-
-      if (progress < 25) {
-        setStatusMessage('Downloading proot binary...');
-      } else if (progress < 40) {
-        setStatusMessage('Downloading Debian rootfs...');
-      } else {
-        setStatusMessage('Installing Node.js...');
+      if (status?.bridgeRunning && !status?.opencodeRunning) {
+        setStatusMessage('OpenCode sunucusu baslatiliyor...');
+      } else if (!status?.bridgeRunning) {
+        const progress = Math.min(70, 10 + attempts);
+        if (progress < 30) {
+          setStatusMessage('Proot indiriliyor...');
+        } else if (progress < 50) {
+          setStatusMessage('Linux ortami kuruluyor...');
+        } else {
+          setStatusMessage('Paketler kuruluyor...');
+        }
       }
 
       await new Promise(r => setTimeout(r, 1000));
       attempts++;
     }
 
-    throw new Error('Installation timed out');
+    throw new Error('Servisler zaman asimina ugradi');
   };
 
-  const startBridge = async () => {
+  const connectServices = async () => {
     try {
-      await ProotModule?.startBridgeService();
+      // Connect to bridge
+      connectBridge('ws://127.0.0.1:8765', '');
 
-      // Wait for bridge to be reachable
-      let attempts = 0;
-      while (attempts < 30) {
-        const running = await ProotModule?.isBridgeRunning();
-        if (running) break;
-        await new Promise(r => setTimeout(r, 1000));
-        attempts++;
-      }
+      // Connect to OpenCode
+      await connectOpenCode('http://127.0.0.1:4096');
 
-      connect('ws://127.0.0.1:8765', '');
-      setDownloadProgress(100);
+      setStatusMessage('Hazar!');
       setCurrentStep('done');
-      setStatusMessage('Ready!');
     } catch (err) {
-      setError('Failed to start bridge service');
+      console.error('[Onboarding] Connection failed:', err);
+      throw new Error('Sunuculara baglanamadi');
     }
   };
 
@@ -138,93 +127,79 @@ export default function OnboardingScreen() {
     router.replace('/');
   };
 
-  const isConnected = connectionState === 'connected';
+  const isConnected = currentStep === 'done';
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Setting up VibeShell</Text>
-        <Text style={styles.subtitle}>
-          {statusMessage}
-        </Text>
+        <Text style={styles.title}>VibeShell Kurulumu</Text>
+        <Text style={styles.subtitle}>{statusMessage}</Text>
       </View>
 
       <ScrollView style={styles.content}>
-        {/* Download Step */}
-        <View style={[styles.step, currentStep === 'download' && styles.stepActive]}>
+        {/* Step 1: Environment */}
+        <View style={[styles.step, currentStep === 'environment' && styles.stepActive]}>
           <View style={styles.stepIcon}>
-            {currentStep === 'download' ? (
-              <ActivityIndicator size="small" color={theme.colors.brand.primary} />
-            ) : downloadProgress === 100 ? (
+            {currentStep !== 'environment' ? (
               <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
             ) : (
-              <View style={styles.stepNumber}><Text style={styles.stepNumberText}>1</Text></View>
+              <ActivityIndicator size="small" color={theme.colors.brand.primary} />
             )}
           </View>
           <View style={styles.stepContent}>
-            <Text style={styles.stepTitle}>Downloading Linux environment</Text>
-            <Text style={styles.stepDesc}>Alpine Linux + Node.js runtime</Text>
-            {currentStep === 'download' && (
-              <>
-                <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: `${downloadProgress}%` }]} />
-                </View>
-                <Text style={styles.progressText}>{downloadProgress}%</Text>
-              </>
-            )}
+            <Text style={styles.stepTitle}>Linux Ortami</Text>
+            <Text style={styles.stepDesc}>Proot + Alpine Linux + Node.js + OpenCode</Text>
           </View>
         </View>
 
-        {/* Extract Step */}
-        <View style={[styles.step, currentStep === 'extract' && styles.stepActive]}>
+        {/* Step 2: Services */}
+        <View style={[styles.step, currentStep === 'services' && styles.stepActive]}>
           <View style={styles.stepIcon}>
-            {currentStep === 'extract' ? (
+            {currentStep === 'services' ? (
               <ActivityIndicator size="small" color={theme.colors.brand.primary} />
-            ) : (currentStep === 'battery' || currentStep === 'start' || currentStep === 'done') ? (
+            ) : (currentStep === 'battery' || currentStep === 'connect' || currentStep === 'done') ? (
               <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
             ) : (
               <View style={styles.stepNumber}><Text style={styles.stepNumberText}>2</Text></View>
             )}
           </View>
           <View style={styles.stepContent}>
-            <Text style={styles.stepTitle}>Preparing environment</Text>
-            <Text style={styles.stepDesc}>Extracting files and setting up proot</Text>
+            <Text style={styles.stepTitle}>Servisleri Baslat</Text>
+            <Text style={styles.stepDesc}>
+              Bridge ({bridgeRunning ? '✓' : '...'}) | OpenCode ({opencodeRunning ? '✓' : '...'})
+            </Text>
           </View>
         </View>
 
-        {/* Battery Optimization Step */}
+        {/* Step 3: Battery */}
         <View style={[styles.step, currentStep === 'battery' && styles.stepActive]}>
           <View style={styles.stepIcon}>
-            {currentStep === 'battery' ? (
-              <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
-            ) : (currentStep === 'start' || currentStep === 'done') ? (
+            {(currentStep === 'connect' || currentStep === 'done') ? (
               <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
             ) : (
               <View style={styles.stepNumber}><Text style={styles.stepNumberText}>3</Text></View>
             )}
           </View>
           <View style={styles.stepContent}>
-            <Text style={styles.stepTitle}>Battery optimization</Text>
-            <Text style={styles.stepDesc}>
-              Allow VibeShell to run in background
-            </Text>
+            <Text style={styles.stepTitle}>Pil Optimizasyonu</Text>
+            <Text style={styles.stepDesc}>Arka planda calismasi icin izin</Text>
           </View>
         </View>
 
-        {/* Start Bridge Step */}
-        <View style={[styles.step, currentStep === 'start' && styles.stepActive]}>
+        {/* Step 4: Connect */}
+        <View style={[styles.step, currentStep === 'connect' && styles.stepActive]}>
           <View style={styles.stepIcon}>
-            {currentStep === 'start' ? (
-              <ActivityIndicator size="small" color={theme.colors.brand.primary} />
-            ) : currentStep === 'done' ? (
+            {currentStep === 'done' ? (
               <Ionicons name="checkmark" size={18} color={theme.colors.semantic.success} />
+            ) : currentStep === 'connect' ? (
+              <ActivityIndicator size="small" color={theme.colors.brand.primary} />
             ) : (
               <View style={styles.stepNumber}><Text style={styles.stepNumberText}>4</Text></View>
             )}
           </View>
           <View style={styles.stepContent}>
-            <Text style={styles.stepTitle}>Starting bridge service</Text>
-            <Text style={styles.stepDesc}>Connecting to local environment</Text>
+            <Text style={styles.stepTitle}>Baglan</Text>
+            <Text style={styles.stepDesc}>Bridge ve OpenCode sunucularina baglan</Text>
           </View>
         </View>
 
@@ -236,11 +211,11 @@ export default function OnboardingScreen() {
           </View>
         )}
 
-        {/* Done */}
+        {/* Success */}
         {currentStep === 'done' && isConnected && (
           <View style={styles.successBox}>
             <Ionicons name="checkmark-circle" size={20} color={theme.colors.semantic.success} />
-            <Text style={styles.successText}>VibeShell is ready</Text>
+            <Text style={styles.successText}>VibeShell hazir!</Text>
           </View>
         )}
       </ScrollView>
@@ -249,7 +224,7 @@ export default function OnboardingScreen() {
       {currentStep === 'done' && (
         <View style={styles.footer}>
           <TouchableOpacity style={styles.doneButton} onPress={handleDone}>
-            <Text style={styles.doneButtonText}>Continue</Text>
+            <Text style={styles.doneButtonText}>Basla</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -324,22 +299,6 @@ const styles = StyleSheet.create({
   stepDesc: {
     ...theme.typography.textStyles.bodySmall,
     color: theme.colors.text.secondary,
-  },
-  progressBar: {
-    height: 4,
-    backgroundColor: theme.colors.surfaces.surface,
-    borderRadius: 2,
-    marginTop: theme.spacing.md,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: theme.colors.brand.primary,
-  },
-  progressText: {
-    ...theme.typography.textStyles.bodySmall,
-    color: theme.colors.text.secondary,
-    marginTop: theme.spacing.xs,
   },
   errorBox: {
     flexDirection: 'row',

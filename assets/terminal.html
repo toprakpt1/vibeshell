@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; background: #0D1117; overflow: hidden; }
+    #terminal { height: 100%; width: 100%; }
+  </style>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+</head>
+<body>
+  <div id="terminal"></div>
+  <script>
+    const term = new Terminal({
+      theme: {
+        background: '#0D1117',
+        foreground: '#E6EDF3',
+        cursor: '#00d4aa',
+        selectionBackground: '#264f78',
+        black: '#0D1117',
+        red: '#FF7B72',
+        green: '#3FB950',
+        yellow: '#D29922',
+        blue: '#58A6FF',
+        magenta: '#BC8CFF',
+        cyan: '#39C5CF',
+        white: '#E6EDF3',
+      },
+      fontSize: 14,
+      fontFamily: 'monospace',
+      cursorBlink: true,
+      allowProposedApi: true,
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    let ws = null;
+    let reconnectTimer = null;
+
+    function connect() {
+      const wsUrl = window.__BRIDGE_WS_URL || 'ws://127.0.0.1:8765';
+      const token = window.__BRIDGE_AUTH_TOKEN || '';
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        if (token) {
+          ws.send(JSON.stringify({ token }));
+        }
+        window.ReactNativeWebView?.postMessage(JSON.stringify({ type: 'connected' }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.authenticated) {
+            window.ReactNativeWebView?.postMessage(JSON.stringify({ type: 'authenticated' }));
+            return;
+          }
+          if (data.stream === 'stdout' || data.stream === 'stderr') {
+            term.write(data.data);
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        window.ReactNativeWebView?.postMessage(JSON.stringify({ type: 'disconnected' }));
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {};
+    }
+
+    // Handle terminal input → send to bridge as exec
+    let currentCommand = '';
+    term.onData((data) => {
+      if (data === '\r') {
+        // Enter — execute command
+        if (currentCommand.trim()) {
+          const id = 'term_' + Date.now();
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              id,
+              method: 'exec',
+              params: { command: currentCommand.trim(), timeout: 60000 },
+            }));
+          }
+        }
+        currentCommand = '';
+        term.write('\r\n');
+      } else if (data === '\x7f') {
+        // Backspace
+        if (currentCommand.length > 0) {
+          currentCommand = currentCommand.slice(0, -1);
+          term.write('\b \b');
+        }
+      } else if (data >= ' ') {
+        currentCommand += data;
+        term.write(data);
+      }
+    });
+
+    // Handle messages from React Native
+    window.handleCommand = function(command) {
+      const id = 'term_' + Date.now();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          id,
+          method: 'exec',
+          params: { command, timeout: 120000 },
+        }));
+      }
+    };
+
+    window.setConfig = function(url, token) {
+      window.__BRIDGE_WS_URL = url;
+      window.__BRIDGE_AUTH_TOKEN = token;
+      if (ws) {
+        ws.close();
+      }
+      connect();
+    };
+
+    window.addEventListener('resize', () => fitAddon.fit());
+    connect();
+  </script>
+</body>
+</html>

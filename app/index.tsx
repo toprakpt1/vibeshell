@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useWorkspaces } from '../src/store/useWorkspaces';
 import { useBridgeStore } from '../src/store/useBridgeStore';
+import { useOpenCodeStore } from '../src/store/useOpenCodeStore';
 import { ConnectionStatus, WorkspaceCard } from '../src/components';
 import { theme } from '../src/theme';
 import * as bridge from '../src/bridge/commands';
@@ -12,6 +13,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { workspaces, addWorkspace, removeWorkspace, setActiveWorkspace } = useWorkspaces();
   const { connectionState } = useBridgeStore();
+  const { connected: openCodeConnected } = useOpenCodeStore();
   const [isAdding, setIsAdding] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPath, setNewPath] = useState('~/projects/');
@@ -42,7 +44,7 @@ export default function HomeScreen() {
     <View style={styles.container}>
       <ConnectionStatus />
       
-      {(connectionState === 'disconnected' || connectionState === 'error') && (
+      {(connectionState === 'disconnected' || connectionState === 'error' || !openCodeConnected) && (
         <TouchableOpacity 
           style={styles.setupBanner}
           onPress={() => router.push('/onboarding')}
@@ -107,7 +109,7 @@ export default function HomeScreen() {
             autoFocus
           />
           
-          <Text style={styles.label}>Termux Path</Text>
+          <Text style={styles.label}>Proje Dizini</Text>
           <TextInput
             style={styles.input}
             value={newPath}
